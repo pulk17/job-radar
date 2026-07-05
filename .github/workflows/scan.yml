@@ -1,0 +1,26 @@
+name: Job scan (every 30 min)
+
+on:
+  schedule:
+    # Every 30 minutes, 06:00–23:30 IST (00:30–18:00 UTC).
+    # GitHub cron can lag a few minutes under load — that's fine here.
+    - cron: '*/30 0-18 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Trigger Job Radar scan
+        run: |
+          set -e
+          echo "Hitting cron endpoint..."
+          RESPONSE=$(curl -sS --max-time 300 -w '\n%{http_code}' \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "${{ secrets.APP_URL }}/api/cron")
+          BODY=$(echo "$RESPONSE" | head -n -1)
+          CODE=$(echo "$RESPONSE" | tail -n 1)
+          echo "HTTP $CODE"
+          echo "$BODY"
+          [ "$CODE" = "200" ]
