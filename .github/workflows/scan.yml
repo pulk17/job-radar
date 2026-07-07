@@ -16,7 +16,7 @@ jobs:
         run: |
           set -e
           echo "Hitting cron endpoint..."
-          RESPONSE=$(curl -sS --max-time 300 -w '\n%{http_code}' \
+          RESPONSE=$(curl -L -sS --max-time 300 -w '\n%{http_code}' \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
             "${{ secrets.APP_URL }}/api/cron")
           BODY=$(echo "$RESPONSE" | head -n -1)
