@@ -259,8 +259,8 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--bg-0);color:var(-
   .search-wrap input{width:100%}.search-wrap input:focus{width:100%}
   .stats-row{grid-template-columns:repeat(3,1fr)}
   .stat-cell:nth-child(4),.stat-cell:nth-child(5){display:none}
-  .role-filters{flex-direction:column;align-items:stretch}
-  .lang-filters{overflow-x:auto;flex-wrap:nowrap;padding-bottom:4px}
+  .role-filters{flex-direction:column;align-items:stretch;align-items:flex-start}
+  .lang-filters{flex-wrap:wrap}
   .calendar-grid{grid-template-columns:1fr}
 }
 @media(max-width:480px){
