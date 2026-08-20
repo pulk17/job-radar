@@ -33,7 +33,7 @@ interface RawJob {
 
 /** Match, score and store one job. Returns id + isNew if it passed the filter. */
 async function processJob(company: Company, raw: RawJob): Promise<{ id: string; isNew: boolean; info: NewJobInfo } | null> {
-  const m = matchJob(raw.title, raw.location, raw.department, raw.content);
+  const m = matchJob(raw.title, raw.location, raw.department, raw.content, company.tier);
   if (m.score < MATCH_THRESHOLD) return null;
 
   const roleType = classifyRoleType(raw.title);
@@ -314,36 +314,63 @@ export interface ScanSummary {
   newJobsFound: number;
   newJobs: NewJobInfo[];
   results: Array<{ company: string; newJobs: number; totalJobs: number; error?: string }>;
+  /** Index to resume from next run; 0 once a full cycle completed */
+  nextCursor: number;
+  /** True when every company was covered in this run */
+  complete: boolean;
+  totalCompanies: number;
 }
 
-export async function runFullScan(): Promise<ScanSummary> {
+export interface ScanOptions {
+  /** Stop starting new batches once this many ms have elapsed (0 = no limit) */
+  budgetMs?: number;
+  /** Company index to start from (for resumable/chunked scans) */
+  cursor?: number;
+}
+
+export async function runFullScan(opts: ScanOptions = {}): Promise<ScanSummary> {
+  const { budgetMs = 0, cursor = 0 } = opts;
   const enabled = COMPANIES.filter(c => c.enabled && c.ats !== 'custom');
+  const total = enabled.length;
+  const started = Date.now();
+  const outOfTime = () => budgetMs > 0 && Date.now() - started > budgetMs;
+
   const results: ScanSummary['results'] = [];
   const allNew: NewJobInfo[] = [];
 
+  // Start at the cursor and wrap around so every company is eventually covered.
+  const ordered = [...enabled.slice(cursor), ...enabled.slice(0, cursor)];
+  let processed = 0;
+
   const batchSize = 5;
-  for (let i = 0; i < enabled.length; i += batchSize) {
-    const batch = enabled.slice(i, i + batchSize);
+  for (let i = 0; i < ordered.length; i += batchSize) {
+    if (outOfTime()) break;
+    const batch = ordered.slice(i, i + batchSize);
     const settled = await Promise.allSettled(batch.map(async (company) => {
       const r = await fetchJobsForCompany(company);
       await recordScanResult(company.name, r.totalCount, r.newCount, r.error);
       return { company: company.name, newJobs: r.newCount, totalJobs: r.totalCount, error: r.error, list: r.newJobs };
     }));
     for (let k = 0; k < settled.length; k++) {
-      const s = settled[k];
-      if (s.status === 'fulfilled') {
-        results.push({ company: s.value.company, newJobs: s.value.newJobs, totalJobs: s.value.totalJobs, error: s.value.error });
-        allNew.push(...s.value.list);
+      const sr = settled[k];
+      if (sr.status === 'fulfilled') {
+        results.push({ company: sr.value.company, newJobs: sr.value.newJobs, totalJobs: sr.value.totalJobs, error: sr.value.error });
+        allNew.push(...sr.value.list);
       } else {
-        results.push({ company: batch[k].name, newJobs: 0, totalJobs: 0, error: String(s.reason) });
+        results.push({ company: batch[k].name, newJobs: 0, totalJobs: 0, error: String(sr.reason) });
       }
     }
+    processed += batch.length;
   }
 
+  const complete = processed >= total;
   return {
     scanned: results.length,
     newJobsFound: allNew.length,
     newJobs: allNew.sort((a, b) => b.score - a.score),
     results,
+    nextCursor: complete ? 0 : (cursor + processed) % total,
+    complete,
+    totalCompanies: total,
   };
 }

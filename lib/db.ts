@@ -51,6 +51,10 @@ async function init(): Promise<void> {
           link_checked_at TEXT,
           notified_at     TEXT
         );
+        CREATE TABLE IF NOT EXISTS meta (
+          key TEXT PRIMARY KEY,
+          value TEXT
+        );
         CREATE TABLE IF NOT EXISTS scan_history (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           company TEXT NOT NULL,
@@ -161,6 +165,30 @@ export interface JobFilters {
   sort?: string; order?: string;
 }
 
+const JOB_COLUMNS = `id,company,tier,title,location,department,apply_url,salary_range,
+  ats_platform,role_type,languages,region,matched_keywords,min_experience,
+  first_seen,last_seen,is_active,match_score,is_bookmarked,status,notes,
+  link_status,link_checked_at`;
+
+/**
+ * Full job set for the client-side filtering cache.
+ * Ships every active job plus recently-expired ones (bookmarked/tracked jobs are
+ * always kept) so the client can filter instantly without refetching.
+ */
+export async function getAllJobs(limit = 4000, expiredWithinDays = 21): Promise<JobRow[]> {
+  const res = await run(
+    `SELECT ${JOB_COLUMNS} FROM jobs
+     WHERE is_active=1
+        OR is_bookmarked=1
+        OR status!='not_applied'
+        OR last_seen > datetime('now', ?)
+     ORDER BY is_active DESC, match_score DESC, first_seen DESC
+     LIMIT ?`,
+    [`-${expiredWithinDays} days`, limit]
+  );
+  return res.rows as unknown as JobRow[];
+}
+
 export async function getJobs(filters: JobFilters): Promise<JobRow[]> {
   const conds: string[] = [];
   const params: InValue[] = [];
@@ -190,26 +218,36 @@ export async function getJobs(filters: JobFilters): Promise<JobRow[]> {
   const sortCol = validSorts[filters.sort || ''] || 'match_score';
   const sortDir = filters.order === 'asc' ? 'ASC' : 'DESC';
   const res = await run(
-    `SELECT * FROM jobs ${where} ORDER BY ${sortCol} ${sortDir}, first_seen DESC LIMIT 1000`,
+    `SELECT ${JOB_COLUMNS} FROM jobs ${where} ORDER BY ${sortCol} ${sortDir}, first_seen DESC LIMIT 1000`,
     params
   );
   return res.rows as unknown as JobRow[];
 }
 
 export async function getStats() {
-  const q = async (sql: string) => Number((await run(sql)).rows[0]?.c ?? 0);
+  // Single pass instead of 9 sequential COUNT round-trips.
+  const res = await run(`
+    SELECT
+      SUM(is_active) as active,
+      COUNT(*) as total,
+      SUM(is_bookmarked) as bookmarked,
+      SUM(CASE WHEN status!='not_applied' THEN 1 ELSE 0 END) as applied,
+      SUM(CASE WHEN date(first_seen)=date('now') THEN 1 ELSE 0 END) as newToday,
+      SUM(CASE WHEN link_status=0 AND is_active=1 THEN 1 ELSE 0 END) as deadLinks,
+      SUM(CASE WHEN role_type='intern' AND is_active=1 THEN 1 ELSE 0 END) as interns,
+      SUM(CASE WHEN role_type='newgrad' AND is_active=1 THEN 1 ELSE 0 END) as newgrad,
+      SUM(CASE WHEN region='india' AND is_active=1 THEN 1 ELSE 0 END) as india,
+      SUM(CASE WHEN region='singapore' AND is_active=1 THEN 1 ELSE 0 END) as singapore
+    FROM jobs
+  `);
+  const r = res.rows[0] || {};
+  const n = (k: string) => Number(r[k] ?? 0);
   const lastScanRes = await run('SELECT MAX(scanned_at) as t FROM scan_history');
   return {
-    active: await q('SELECT COUNT(*) as c FROM jobs WHERE is_active=1'),
-    total: await q('SELECT COUNT(*) as c FROM jobs'),
-    bookmarked: await q('SELECT COUNT(*) as c FROM jobs WHERE is_bookmarked=1'),
-    applied: await q("SELECT COUNT(*) as c FROM jobs WHERE status!='not_applied'"),
-    newToday: await q("SELECT COUNT(*) as c FROM jobs WHERE date(first_seen)=date('now')"),
-    deadLinks: await q('SELECT COUNT(*) as c FROM jobs WHERE link_status=0 AND is_active=1'),
-    interns: await q("SELECT COUNT(*) as c FROM jobs WHERE role_type='intern' AND is_active=1"),
-    newgrad: await q("SELECT COUNT(*) as c FROM jobs WHERE role_type='newgrad' AND is_active=1"),
-    india: await q("SELECT COUNT(*) as c FROM jobs WHERE region='india' AND is_active=1"),
-    singapore: await q("SELECT COUNT(*) as c FROM jobs WHERE region='singapore' AND is_active=1"),
+    active: n('active'), total: n('total'), bookmarked: n('bookmarked'),
+    applied: n('applied'), newToday: n('newToday'), deadLinks: n('deadLinks'),
+    interns: n('interns'), newgrad: n('newgrad'),
+    india: n('india'), singapore: n('singapore'),
     lastScan: (lastScanRes.rows[0]?.t as string | null) || null,
   };
 }
@@ -253,6 +291,18 @@ export async function getCompanyScanStatus(): Promise<CompanyScanStatus[]> {
   return res.rows as unknown as CompanyScanStatus[];
 }
 
+export async function getMeta(key: string): Promise<string | null> {
+  const res = await run('SELECT value FROM meta WHERE key=?', [key]);
+  return (res.rows[0]?.value as string | undefined) ?? null;
+}
+
+export async function setMeta(key: string, value: string): Promise<void> {
+  await run(
+    'INSERT INTO meta (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+    [key, value]
+  );
+}
+
 export async function getLinksToCheck(limit = 50): Promise<Array<{ id: string; apply_url: string }>> {
   const res = await run(
     `SELECT id,apply_url FROM jobs
@@ -279,7 +329,7 @@ export async function getAvailableLanguages() {
 /** New active jobs that have not been notified yet (for Telegram/ntfy alerts) */
 export async function getUnnotifiedJobs(minScore = 0.3, limit = 25): Promise<JobRow[]> {
   const res = await run(
-    `SELECT * FROM jobs WHERE notified_at IS NULL AND is_active=1 AND match_score>=?
+    `SELECT ${JOB_COLUMNS} FROM jobs WHERE notified_at IS NULL AND is_active=1 AND match_score>=?
      ORDER BY match_score DESC LIMIT ?`, [minScore, limit]);
   return res.rows as unknown as JobRow[];
 }

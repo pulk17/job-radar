@@ -3,24 +3,71 @@ name: Job scan (every 30 min)
 on:
   schedule:
     # Every 30 minutes, 06:00–23:30 IST (00:30–18:00 UTC).
-    # GitHub cron can lag a few minutes under load — that's fine here.
+    # GitHub cron can lag several minutes under load — that's fine here.
     - cron: '*/30 0-18 * * *'
   workflow_dispatch: {}
+
+# A slow scan must not pile up on top of the previous run.
+concurrency:
+  group: job-scan
+  cancel-in-progress: false
 
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - name: Trigger Job Radar scan
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          set -e
-          echo "Hitting cron endpoint..."
-          RESPONSE=$(curl -L -sS --max-time 300 -w '\n%{http_code}' \
-            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "${{ secrets.APP_URL }}/api/cron")
-          BODY=$(echo "$RESPONSE" | head -n -1)
-          CODE=$(echo "$RESPONSE" | tail -n 1)
-          echo "HTTP $CODE"
-          echo "$BODY"
-          [ "$CODE" = "200" ]
+          set -uo pipefail
+
+          if [ -z "${APP_URL:-}" ]; then
+            echo "::error::APP_URL secret is not set (Settings → Secrets → Actions)."
+            exit 1
+          fi
+          # Tolerate a trailing slash in the secret
+          BASE="${APP_URL%/}"
+
+          attempt=1
+          max=3
+          while [ "$attempt" -le "$max" ]; do
+            echo "── Attempt $attempt/$max → $BASE/api/cron"
+            # --max-time 600: a cold serverless start plus ~90 boards can exceed 5 min.
+            # --retry handles connection resets/5xx before we even count an attempt.
+            CODE=$(curl -sS -L -o response.json -w '%{http_code}' \
+              --max-time 600 --connect-timeout 30 \
+              --retry 2 --retry-delay 10 --retry-connrefused \
+              -H "Authorization: Bearer ${CRON_SECRET:-}" \
+              "$BASE/api/cron") || CODE="000"
+
+            echo "HTTP $CODE"
+            head -c 2000 response.json 2>/dev/null || true
+            echo
+
+            case "$CODE" in
+              200)
+                echo "✅ Scan completed."
+                exit 0
+                ;;
+              401|403)
+                echo "::error::Unauthorized ($CODE) — CRON_SECRET here does not match the one on the host."
+                exit 1
+                ;;
+              404)
+                echo "::error::404 — check APP_URL points at the deployed app root."
+                exit 1
+                ;;
+              *)
+                echo "::warning::Attempt $attempt failed with HTTP $CODE."
+                ;;
+            esac
+
+            attempt=$((attempt + 1))
+            [ "$attempt" -le "$max" ] && sleep 30
+          done
+
+          echo "::error::Scan failed after $max attempts."
+          exit 1

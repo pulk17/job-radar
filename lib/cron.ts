@@ -15,7 +15,7 @@ export function startScheduler() {
       console.log('[Cron] Starting scheduled scan...');
       try {
         const { runScanAndNotify } = await import('./scan-runner');
-        const r = await runScanAndNotify();
+        const r = await runScanAndNotify({ resumable: false });
         console.log(`[Cron] Scan done: ${r.scanned} companies, ${r.newJobsFound} new, notified=${r.notified}`);
       } catch (err) {
         console.error('[Cron] task error:', err);

@@ -1,8 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  serverExternalPackages: ['better-sqlite3', 'node-cron'],
+  serverExternalPackages: ['@libsql/client', 'node-cron'],
   output: 'standalone',
+  compress: true,
 };
 
 export default nextConfig;

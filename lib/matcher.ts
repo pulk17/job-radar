@@ -1,5 +1,6 @@
 // Role matching v2 — India + Singapore, JD-content scoring, YoE extraction.
 // Profile: C++, TypeScript/Next.js, Python, Go, CP, low-latency systems, 0 YOE.
+import { TIER_FOCUS, type Tier } from './companies';
 
 export type Region = 'india' | 'singapore' | 'remote' | 'other';
 
@@ -9,12 +10,31 @@ const INDIA_LOCATIONS = [
   'mysore', 'mysuru', 'ahmedabad',
 ];
 
+// Countries/markets that make a "Remote" posting unreachable from India/Singapore.
+// e.g. "Backend Engineer - Platform | Sweden | Remote" is remote *within Sweden*.
+const FOREIGN_LOCATIONS = new RegExp(
+  '\\b(us|usa|u\\.s\\.|united states|american?|canada|toronto|uk|united kingdom|' +
+  'london|england|scotland|ireland|dublin|europe|european|emea|eu|germany|berlin|' +
+  'munich|france|paris|spain|madrid|barcelona|portugal|lisbon|italy|milan|rome|' +
+  'netherlands|amsterdam|belgium|poland|warsaw|krakow|romania|bucharest|czech|' +
+  'prague|hungary|budapest|greece|athens|sweden|stockholm|norway|oslo|denmark|' +
+  'copenhagen|finland|helsinki|switzerland|zurich|austria|vienna|ukraine|estonia|' +
+  'latvia|lithuania|bulgaria|serbia|croatia|australia|sydney|melbourne|' +
+  'new zealand|japan|tokyo|china|beijing|shanghai|shenzhen|hong kong|taiwan|' +
+  'taipei|korea|seoul|vietnam|hanoi|thailand|bangkok|indonesia|jakarta|' +
+  'philippines|manila|malaysia|kuala lumpur|brazil|sao paulo|mexico|argentina|' +
+  'colombia|chile|peru|nigeria|lagos|kenya|nairobi|south africa|egypt|cairo|' +
+  'turkey|istanbul|israel|tel aviv|dubai|uae|abu dhabi|saudi|riyadh|qatar|doha)\\b',
+  'i'
+);
+
 export function detectRegion(location?: string, title?: string): Region {
   const text = `${location || ''} ${title || ''}`.toLowerCase();
+  // An explicit India/Singapore mention wins, even in a multi-site posting.
   if (INDIA_LOCATIONS.some(kw => text.includes(kw))) return 'india';
   if (text.includes('singapore')) return 'singapore';
-  // "Remote" without a conflicting country — only count as remote if not tied elsewhere
-  if (/\bremote\b/.test(text) && !/\b(us|usa|united states|uk|london|europe|emea|americas|canada|australia|japan|china|germany|poland|netherlands)\b/.test(text)) {
+  // Otherwise "Remote" only counts when it isn't pinned to a foreign market.
+  if (/\bremote\b|\banywhere\b/.test(text) && !FOREIGN_LOCATIONS.test(text)) {
     return 'remote';
   }
   return 'other';
@@ -57,6 +77,34 @@ const NEGATIVE_TITLE = [
   'hr ', 'human resources', 'finance analyst', 'accountant', 'payroll',
   'administrative', 'executive assistant', 'customer success', 'support engineer ii',
 ];
+
+/**
+ * A title must show at least one of these to be considered a software role.
+ * Without this, "Financial Analyst Intern" or "Trainee - Recruitment Coordinator"
+ * score highly purely on the intern/analyst/trainee career-stage signal.
+ */
+const ENGINEERING_TITLE = new RegExp(
+  '\\b(engineer|engineering|developer|development|programmer|sde|swe|sre|devops|' +
+  'scientist|research|quant|quantitative|trader|trading|software|technolog\\w*|' +
+  'technical staff|data|machine learning|ml|ai|analytics|platform|infrastructure|' +
+  'backend|back-end|frontend|front-end|full.?stack|mobile|android|ios|web|cloud|' +
+  'security|cyber|network|system|systems|firmware|embedded|silicon|hardware|' +
+  'verification|validation|compiler|database|devrel|qa|test|testing|tester|' +
+  'automation|robotics|graphics|computer vision|nlp|it)\\b', 'i'
+);
+
+// Roles that are clearly not software even when they contain an engineering-ish word
+const NON_TECH_TITLE = new RegExp(
+  '\\b(sales|account executive|account manager|business development|recruiter|' +
+  'recruiting|recruitment|talent acquisition|human resources|hr|people operations|' +
+  'payroll|financial analyst|finance|accountant|accounting|audit|tax|legal|counsel|' +
+  'paralegal|marketing|brand|content writer|copywriter|social media|public relations|' +
+  'communications|customer success|customer support|customer service|' +
+  'technical account manager|solution consultant|solutions consultant|presales|' +
+  'pre-sales|procurement|supply chain|logistics|warehouse|category|merchandising|' +
+  'facilities|administrative|executive assistant|office manager|receptionist|' +
+  'teacher|trainer|instructor|nurse|physician|driver|apprentice|coordinator)\\b', 'i'
+);
 
 // Content phrases signalling senior-only roles
 const NEGATIVE_CONTENT = [
@@ -109,11 +157,18 @@ function stripHtml(html: string): string {
     .replace(/\s+/g, ' ');
 }
 
-export function matchJob(title: string, location?: string, department?: string, content?: string): MatchResult {
+export function matchJob(title: string, location?: string, department?: string, content?: string, tier?: Tier): MatchResult {
   const region = detectRegion(location, title);
   if (region === 'other') return { score: -1, region, matchedKeywords: [], minExperience: null };
 
   const titleLower = title.toLowerCase();
+
+  // Hard gate: must look like a software role, and must not be a clearly
+  // non-technical one. Keeps the list to JDs actually worth applying to.
+  if (!ENGINEERING_TITLE.test(titleLower) || NON_TECH_TITLE.test(titleLower)) {
+    return { score: -1, region, matchedKeywords: [], minExperience: null };
+  }
+
   const body = content ? stripHtml(content).toLowerCase() : '';
   const fullText = `${titleLower} ${(department || '').toLowerCase()} ${body}`;
   const matched = new Set<string>();
@@ -147,8 +202,16 @@ export function matchJob(title: string, location?: string, department?: string, 
   score += 0.10;
   if (region === 'india') score += 0.02; // slight home-region preference
 
+  // 5b. Focus weighting — big tech & startups rank above quant/banking/hardware
+  if (tier) score += TIER_FOCUS[tier] ?? 0;
+
   // 6. Seniority / wrong-function penalties
-  const negTitleHits = NEGATIVE_TITLE.filter(kw => titleLower.includes(kw));
+  // "Member of Technical Staff" is the standard *entry* title at AI labs
+  // (OpenAI, Anthropic, Sarvam) — don't let the generic "staff" rule bury it.
+  const isMts = /member of technical staff/i.test(titleLower);
+  const negTitleHits = NEGATIVE_TITLE.filter(kw =>
+    titleLower.includes(kw) && !(isMts && kw === 'staff')
+  );
   score -= negTitleHits.length * 0.20;
   const negContentHits = NEGATIVE_CONTENT.filter(kw => fullText.includes(kw));
   score -= negContentHits.length * 0.10;

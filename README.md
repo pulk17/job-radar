@@ -2,8 +2,11 @@
 
 Personal job-hunting radar for high-paying software roles in **India 🇮🇳 and Singapore 🇸🇬** — quant/HFT, big tech, AI labs, product companies, banks, semiconductors and top startups.
 
-- **95 companies tracked, 75+ scanned automatically** via their real ATS APIs (Greenhouse, Lever, Ashby, SmartRecruiters, Workday, Eightfold, plus dedicated Amazon/Uber/Atlassian/Microsoft adapters). Every slug verified live.
+- **185 companies tracked, 118 scanned automatically** via their real ATS APIs (Greenhouse, Lever, Ashby, SmartRecruiters, Workday, Eightfold, plus dedicated Amazon/Atlassian/Microsoft adapters). Every slug verified live.
+- **Focused on big tech + startups** — the default "⭐ Focus" filter spans Big Tech, Startups, Product and AI; quant/banking/hardware stay tracked but rank lower. Tune it via `TIER_FOCUS` in [lib/companies.ts](lib/companies.ts).
+- **Instant filtering** — the whole job set loads once and every filter, sort and search runs client-side (5–80ms, zero network round-trips).
 - **Smart matching** tuned for a 0-YOE C++/TypeScript/Python profile: scores from the full JD text, extracts required years-of-experience, tags region, shows *why* each job matched.
+- **Sort by best match, newest, company or title** — click a sort chip again to flip direction.
 - **Push notifications** (Telegram and/or ntfy.sh — both free) whenever new matched jobs appear.
 - **Application tracker**: star, status (applied/OA/interview/offer), notes, dead-link detection, CSV export.
 - **Hiring calendar**: researched intern/new-grad cycles so you apply in the right window.
@@ -59,7 +62,9 @@ Repo → Settings → Secrets and variables → Actions → add:
 - `APP_URL` = your Vercel URL (no trailing slash)
 - `CRON_SECRET` = same value as on Vercel
 
-That's it — [.github/workflows/scan.yml](.github/workflows/scan.yml) runs every 30 minutes (06:00–23:30 IST), scans all portals, and pushes notifications. Run it manually once from the Actions tab to verify.
+That's it — [.github/workflows/scan.yml](.github/workflows/scan.yml) runs every 30 minutes (06:00–23:30 IST), scans the portals, and pushes notifications. Run it manually once from the Actions tab to verify.
+
+**Why the workflow is reliable:** serverless hosts cap function runtime (Vercel Hobby ≈ 60s) and a full pass over 118 boards takes longer than that, which would 504. So cron scans are **budgeted and resumable** — each run scans as many boards as fit inside `SCAN_BUDGET_MS` (default 40s), saves a cursor, and the next run picks up where it left off, cycling through everything roughly hourly. The workflow itself retries up to 3 times, follows redirects, and fails loudly with a clear message on 401 (secret mismatch) or 404 (bad `APP_URL`).
 
 ### 5. Notifications
 
@@ -74,12 +79,20 @@ Then click **🔔 Alerts** in the app header to send a test. The first test also
 
 ## How scanning works
 
-- `POST /api/scan` or `GET /api/cron?secret=…` → fetches all 75+ scannable boards in parallel batches, scores each job against your profile, upserts into the DB, marks vanished postings expired, notifies about new matches, and spot-checks apply-link liveness.
+- `POST /api/scan` (the **Scan All** button) → a complete pass over all 118 scannable boards in parallel batches: scores each job against your profile, upserts into the DB, marks vanished postings expired, notifies about new matches, and spot-checks apply-link liveness. Takes ~90s.
+- `GET /api/cron?secret=…` → the same pipeline, but **budgeted and resumable** (see above) so it never exceeds a serverless timeout.
 - Companies without a public API (Google, Meta, Apple, Goldman, DE Shaw…) appear in the **Company Coverage** panel as "check manually" cards with direct careers links, and in the hiring calendar so you know *when* checking matters.
 
-## Tuning the matcher
+## Tuning
 
-Edit [lib/matcher.ts](lib/matcher.ts): `POSITIVE_TITLE` / `POSITIVE_STACK` keyword banks, `NEGATIVE_TITLE` exclusions, YoE penalties, and `MATCH_THRESHOLD`. Add/remove companies in [lib/companies.ts](lib/companies.ts) (set `atsSlug` for auto-scanning).
+- **Matching**: [lib/matcher.ts](lib/matcher.ts) — `POSITIVE_TITLE` / `POSITIVE_STACK` keyword banks, `NEGATIVE_TITLE` exclusions, YoE penalties, `MATCH_THRESHOLD`.
+- **What ranks first**: `TIER_FOCUS` in [lib/companies.ts](lib/companies.ts) is added to each job's score by tier. Currently big tech and startups get `+0.12`, AI `+0.08`, product `+0.06`, quant `−0.05`, banking/hardware `−0.03`.
+- **Which tiers the ⭐ Focus tab covers**: `FOCUS_TIERS` in [app/page.tsx](app/page.tsx).
+- **Companies**: add to [lib/companies.ts](lib/companies.ts). Set `ats` + `atsSlug` for auto-scanning, or `ats: 'custom'` for link-only tracking.
+
+### Toolchain note
+
+Pinned to **ESLint 9** and **TypeScript 5.9** on purpose: `eslint-config-next` bundles a `typescript-eslint` that throws `does not support TS 7.0`, and ESLint 10 breaks its `eslint-plugin-react`. Everything else (Next 16.3, React 19.2, node-cron 4.6) is on latest. Revisit once `eslint-config-next` ships support.
 
 ## Self-hosted alternative
 
