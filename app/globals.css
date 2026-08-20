@@ -14,7 +14,9 @@
   --teal: #14b8a6; --teal-muted: rgba(20,184,166,0.12);
   --radius: 8px; --radius-sm: 6px;
   --mono: 'JetBrains Mono', monospace;
-  --grid: 30px 1fr 58px 132px 92px 52px 84px 76px;
+  /* 9 columns, one per .job-row child:
+     star | link-dot | main | type | company | salary | score | status | apply */
+  --grid: 30px 12px 1fr 58px 132px 92px 52px 84px 76px;
 }
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
 html{scroll-behavior:smooth;-webkit-font-smoothing:antialiased}
