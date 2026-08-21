@@ -13,7 +13,7 @@ interface Job {
   link_status: number; link_checked_at: string | null;
 }
 interface Stats {
-  active: number; total: number; bookmarked: number; applied: number;
+  active: number; total: number; bookmarked: number; applied: number; dismissed: number;
   newToday: number; deadLinks: number; interns: number; newgrad: number;
   india: number; singapore: number; lastScan: string | null;
 }
@@ -41,9 +41,12 @@ const TIERS = [
   { key: 'quant', label: 'Quant' }, { key: 'banking', label: 'Banking' },
   { key: 'semi', label: 'Hardware' },
 ];
+// 'active' is the working feed: open roles you haven't ticked off yet.
+// Anything applied to or marked not-interested drops out of it and lives in its own tab.
 const VIEWS = [
-  { key: 'active', label: 'Active' }, { key: 'all', label: 'All' },
+  { key: 'active', label: 'Inbox' }, { key: 'all', label: 'All' },
   { key: 'bookmarked', label: 'Starred' }, { key: 'applied', label: 'Applied' },
+  { key: 'hidden', label: 'Not Interested' },
   { key: 'expired', label: 'Expired' },
 ];
 const ROLE_TYPES = [
@@ -67,7 +70,9 @@ const STATUS_OPTIONS = [
   { key: 'interviewing', label: 'Interview', color: 'var(--orange)' },
   { key: 'offered', label: 'Offered', color: 'var(--green)' },
   { key: 'rejected', label: 'Rejected', color: 'var(--red)' },
+  { key: 'not_interested', label: 'Not Interested', color: 'var(--text-3)' },
 ];
+const DONE_STATUSES = ['applied', 'oa', 'interviewing', 'offered', 'rejected'];
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 function parseTs(d: string): number {
@@ -103,7 +108,7 @@ function readUrlFilters(): Record<string, string> {
 export default function Home() {
   const urlInit = useMemo(() => readUrlFilters(), []);
   const [allJobs, setAllJobs] = useState<Job[]>([]);
-  const [stats, setStats] = useState<Stats>({ active: 0, total: 0, bookmarked: 0, applied: 0, newToday: 0, deadLinks: 0, interns: 0, newgrad: 0, india: 0, singapore: 0, lastScan: null });
+  const [stats, setStats] = useState<Stats>({ active: 0, total: 0, bookmarked: 0, applied: 0, dismissed: 0, newToday: 0, deadLinks: 0, interns: 0, newgrad: 0, india: 0, singapore: 0, lastScan: null });
   const [availableLangs, setAvailableLangs] = useState<LangOpt[]>([]);
   const [tier, setTier] = useState(urlInit.tier || 'focus');
   const [view, setView] = useState(urlInit.view || 'active');
@@ -129,6 +134,7 @@ export default function Home() {
   const [notifTesting, setNotifTesting] = useState(false);
   const [notifResult, setNotifResult] = useState<string | null>(null);
   const [reloadTick, setReloadTick] = useState(0);
+  const [undo, setUndo] = useState<{ id: string; prev: string; label: string; status: string } | null>(null);
 
   // ── One fetch of the whole job set; all filtering happens in memory below ──
   useEffect(() => {
@@ -187,10 +193,14 @@ export default function Home() {
     const q = search.trim().toLowerCase();
     const langs = selectedLangs;
     const out = allJobs.filter(j => {
-      if (view === 'active' && j.is_active !== 1) return false;
+      // Ticked-off jobs (applied / not interested) only show in their own tabs,
+      // so the inbox and the tier counts stay uncluttered.
+      if (view === 'active' && (j.is_active !== 1 || j.status !== 'not_applied')) return false;
+      if (view === 'all' && j.status === 'not_interested') return false;
       if (view === 'expired' && j.is_active !== 0) return false;
       if (view === 'bookmarked' && j.is_bookmarked !== 1) return false;
-      if (view === 'applied' && j.status === 'not_applied') return false;
+      if (view === 'applied' && !DONE_STATUSES.includes(j.status)) return false;
+      if (view === 'hidden' && j.status !== 'not_interested') return false;
       if (tier === 'focus') { if (!FOCUS_TIERS.includes(j.tier)) return false; }
       else if (tier !== 'all' && j.tier !== tier) return false;
       if (roleType !== 'all' && j.role_type !== roleType) return false;
@@ -252,6 +262,15 @@ export default function Home() {
     }).catch(() => setReloadTick(t => t + 1));
   };
 
+  // Tick a job off (or untick it). The row leaves the inbox immediately, so the
+  // undo bar is the only way back — keep it around until the next tick.
+  const tick = (job: Job, status: string) => {
+    const next = job.status === status ? 'not_applied' : status;
+    act(job.id, 'status', { status: next });
+    setUndo(next === 'not_applied' ? null
+      : { id: job.id, prev: job.status, label: `${job.company} — ${job.title}`, status: next });
+  };
+
   const toggleSort = (col: string) => {
     if (sort === col) setOrder(order === 'desc' ? 'asc' : 'desc');
     else { setSort(col); setOrder('desc'); }
@@ -268,7 +287,10 @@ export default function Home() {
 
   const hasFilters = tier !== 'focus' || view !== 'active' || search || roleType !== 'all' || region !== 'all' || selectedLangs.length > 0;
   const tierCounts = useMemo(() => {
-    const base = allJobs.filter(j => view === 'active' ? j.is_active === 1 : true);
+    const base = allJobs.filter(j =>
+      view === 'active' ? (j.is_active === 1 && j.status === 'not_applied')
+        : view === 'hidden' ? j.status === 'not_interested'
+          : true);
     const counts = base.reduce<Record<string, number>>((a, j) => { a[j.tier] = (a[j.tier] || 0) + 1; return a; }, {});
     counts.focus = FOCUS_TIERS.reduce((n, t) => n + (counts[t] || 0), 0);
     return counts;
@@ -318,12 +340,22 @@ export default function Home() {
         </div>
       )}
 
+      {undo && (
+        <div className="scan-bar undo-bar">
+          <span className="label">
+            {undo.status === 'not_interested' ? 'Hidden' : 'Marked applied'} · <b>{undo.label}</b>
+          </span>
+          <button className="btn-sm" onClick={() => { act(undo.id, 'status', { status: undo.prev }); setUndo(null); }}>Undo</button>
+          <button className="scan-dismiss" onClick={() => setUndo(null)}>&times;</button>
+        </div>
+      )}
+
       <div className="stats-row">
         {[
           { v: stats.active, l: 'Active' }, { v: stats.newToday, l: 'New Today' },
           { v: `${stats.interns} / ${stats.newgrad}`, l: 'Intern / Grad' },
           { v: `${stats.india} / ${stats.singapore}`, l: '🇮🇳 / 🇸🇬' },
-          { v: stats.applied, l: 'Applied' },
+          { v: `${stats.applied} / ${stats.dismissed}`, l: 'Applied / Hidden' },
         ].map((s, i) => (
           <div key={i} className="stat-cell">
             <div className="stat-val">{typeof s.v === 'number' ? s.v.toLocaleString() : s.v}</div>
@@ -395,6 +427,7 @@ export default function Home() {
           <span className="sortable" onClick={() => toggleSort('company')}>Company {sortArrow('company')}</span>
           <span>Salary</span>
           <span className="sortable" onClick={() => toggleSort('score')}>Score {sortArrow('score')}</span>
+          <span>Tick off</span>
           <span>Status</span>
           <span></span>
         </div>
@@ -489,6 +522,14 @@ export default function Home() {
                 <span className={`tier-badge ${job.tier} col-company`}>{job.company}</span>
                 <span className="job-salary">{job.salary_range || '—'}</span>
                 <span className={`job-score ${scoreClass(job.match_score)} col-score`}>{pct}%</span>
+                <div className="quick-cell" onClick={e => e.stopPropagation()}>
+                  <button className={`quick-btn applied ${job.status === 'applied' ? 'on' : ''}`}
+                    onClick={() => tick(job, 'applied')}
+                    title={job.status === 'applied' ? 'Undo applied' : 'Mark applied'}>✓<span className="quick-lbl"> Applied</span></button>
+                  <button className={`quick-btn skip ${job.status === 'not_interested' ? 'on' : ''}`}
+                    onClick={() => tick(job, 'not_interested')}
+                    title={job.status === 'not_interested' ? 'Bring back' : 'Not interested — hide it'}>✕<span className="quick-lbl"> Not interested</span></button>
+                </div>
                 <div className="status-cell" onClick={e => { e.stopPropagation(); setStatusDropdown(statusDropdown === job.id ? null : job.id); }}>
                   <span className="status-badge" style={{ borderColor: st.color, color: st.color }}>{st.label}</span>
                   {statusDropdown === job.id && (

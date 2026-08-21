@@ -231,7 +231,8 @@ export async function getStats() {
       SUM(is_active) as active,
       COUNT(*) as total,
       SUM(is_bookmarked) as bookmarked,
-      SUM(CASE WHEN status!='not_applied' THEN 1 ELSE 0 END) as applied,
+      SUM(CASE WHEN status NOT IN ('not_applied','not_interested') THEN 1 ELSE 0 END) as applied,
+      SUM(CASE WHEN status='not_interested' THEN 1 ELSE 0 END) as dismissed,
       SUM(CASE WHEN date(first_seen)=date('now') THEN 1 ELSE 0 END) as newToday,
       SUM(CASE WHEN link_status=0 AND is_active=1 THEN 1 ELSE 0 END) as deadLinks,
       SUM(CASE WHEN role_type='intern' AND is_active=1 THEN 1 ELSE 0 END) as interns,
@@ -245,7 +246,7 @@ export async function getStats() {
   const lastScanRes = await run('SELECT MAX(scanned_at) as t FROM scan_history');
   return {
     active: n('active'), total: n('total'), bookmarked: n('bookmarked'),
-    applied: n('applied'), newToday: n('newToday'), deadLinks: n('deadLinks'),
+    applied: n('applied'), dismissed: n('dismissed'), newToday: n('newToday'), deadLinks: n('deadLinks'),
     interns: n('interns'), newgrad: n('newgrad'),
     india: n('india'), singapore: n('singapore'),
     lastScan: (lastScanRes.rows[0]?.t as string | null) || null,
@@ -257,7 +258,7 @@ export async function toggleBookmark(id: string) {
 }
 
 export async function setStatus(id: string, status: string) {
-  const valid = ['not_applied', 'applied', 'oa', 'interviewing', 'offered', 'rejected'];
+  const valid = ['not_applied', 'applied', 'oa', 'interviewing', 'offered', 'rejected', 'not_interested'];
   if (!valid.includes(status)) return;
   await run('UPDATE jobs SET status=? WHERE id=?', [status, id]);
 }
@@ -329,7 +330,7 @@ export async function getAvailableLanguages() {
 /** New active jobs that have not been notified yet (for Telegram/ntfy alerts) */
 export async function getUnnotifiedJobs(minScore = 0.3, limit = 25): Promise<JobRow[]> {
   const res = await run(
-    `SELECT ${JOB_COLUMNS} FROM jobs WHERE notified_at IS NULL AND is_active=1 AND match_score>=?
+    `SELECT ${JOB_COLUMNS} FROM jobs WHERE notified_at IS NULL AND is_active=1 AND status='not_applied' AND match_score>=?
      ORDER BY match_score DESC LIMIT ?`, [minScore, limit]);
   return res.rows as unknown as JobRow[];
 }

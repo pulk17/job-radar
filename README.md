@@ -8,6 +8,7 @@ Personal job-hunting radar for high-paying software roles in **India 🇮🇳 an
 - **Smart matching** tuned for a 0-YOE C++/TypeScript/Python profile: scores from the full JD text, extracts required years-of-experience, tags region, shows *why* each job matched.
 - **Sort by best match, newest, company or title** — click a sort chip again to flip direction.
 - **Push notifications** (Telegram and/or ntfy.sh — both free) whenever new matched jobs appear.
+- **Tick jobs off**: one click on ✓ Applied or ✕ Not interested drops a row out of the Inbox (with an Undo bar) into its own tab. Ticked-off jobs never come back in a rescan and never trigger a notification.
 - **Application tracker**: star, status (applied/OA/interview/offer), notes, dead-link detection, CSV export.
 - **Hiring calendar**: researched intern/new-grad cycles so you apply in the right window.
 
