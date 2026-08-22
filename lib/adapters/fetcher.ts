@@ -1,6 +1,6 @@
 import { Company, COMPANIES } from '../companies';
 import { matchJob, MATCH_THRESHOLD, classifyRoleType, detectLanguages } from '../matcher';
-import { upsertJob, markInactiveJobs, recordScanResult } from '../db';
+import { upsertJobs, markInactiveJobs, recordScanResult, UpsertJobInput } from '../db';
 import crypto from 'crypto';
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
@@ -31,46 +31,43 @@ interface RawJob {
   content?: string;
 }
 
-/** Match, score and store one job. Returns id + isNew if it passed the filter. */
-async function processJob(company: Company, raw: RawJob): Promise<{ id: string; isNew: boolean; info: NewJobInfo } | null> {
-  const m = matchJob(raw.title, raw.location, raw.department, raw.content, company.tier);
-  if (m.score < MATCH_THRESHOLD) return null;
-
-  const roleType = classifyRoleType(raw.title);
-  const languages = detectLanguages(raw.title, raw.content);
-  const id = hashId(company.name, raw.title, raw.location);
-  const isNew = await upsertJob({
-    id, company: company.name, tier: company.tier, title: raw.title,
-    location: raw.location, department: raw.department,
-    apply_url: raw.applyUrl, salary_range: company.salary, ats_platform: company.ats,
-    role_type: roleType, languages: languages.join(','),
-    region: m.region, matched_keywords: m.matchedKeywords.join(','),
-    min_experience: m.minExperience, match_score: m.score,
-  });
-  return {
-    id, isNew,
-    info: { company: company.name, title: raw.title, location: raw.location, applyUrl: raw.applyUrl, score: m.score, roleType, region: m.region },
-  };
-}
-
-/** Run raw jobs through matching/storage and mark vanished ones inactive. */
+/** Run raw jobs through matching, store them in one batch, mark vanished ones inactive. */
 async function ingest(company: Company, raws: RawJob[]): Promise<FetchResult> {
-  const activeIds: string[] = [];
-  const newJobs: NewJobInfo[] = [];
+  const rows: UpsertJobInput[] = [];
+  const info = new Map<string, NewJobInfo>();
+
   for (const raw of raws) {
     if (!raw.title) continue;
-    const r = await processJob(company, raw);
-    if (r) { activeIds.push(r.id); if (r.isNew) newJobs.push(r.info); }
+    const m = matchJob(raw.title, raw.location, raw.department, raw.content, company.tier);
+    if (m.score < MATCH_THRESHOLD) continue;
+
+    const roleType = classifyRoleType(raw.title);
+    const id = hashId(company.name, raw.title, raw.location);
+    rows.push({
+      id, company: company.name, tier: company.tier, title: raw.title,
+      location: raw.location, department: raw.department,
+      apply_url: raw.applyUrl, salary_range: company.salary, ats_platform: company.ats,
+      role_type: roleType, languages: detectLanguages(raw.title, raw.content).join(','),
+      region: m.region, matched_keywords: m.matchedKeywords.join(','),
+      min_experience: m.minExperience, match_score: m.score,
+    });
+    info.set(id, {
+      company: company.name, title: raw.title, location: raw.location,
+      applyUrl: raw.applyUrl, score: m.score, roleType, region: m.region,
+    });
   }
-  await markInactiveJobs(company.name, activeIds);
-  return { newCount: newJobs.length, totalCount: activeIds.length, newJobs };
+
+  const createdIds = await upsertJobs(rows);
+  await markInactiveJobs(company.name, rows.map(r => r.id));
+  const newJobs = [...createdIds].map(id => info.get(id)).filter((x): x is NewJobInfo => !!x);
+  return { newCount: newJobs.length, totalCount: rows.length, newJobs };
 }
 
 async function getJson(url: string, init?: RequestInit): Promise<unknown> {
   const res = await fetch(url, {
     ...init,
     headers: { 'User-Agent': UA, 'Accept': 'application/json', ...(init?.headers || {}) },
-    signal: AbortSignal.timeout(20000),
+    signal: AbortSignal.timeout(12000),  // a careers API slower than this is broken; the cron run has a serverless deadline
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();

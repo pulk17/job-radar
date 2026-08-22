@@ -65,7 +65,7 @@ Repo → Settings → Secrets and variables → Actions → add:
 
 That's it — [.github/workflows/scan.yml](.github/workflows/scan.yml) runs every 30 minutes (06:00–23:30 IST), scans the portals, and pushes notifications. Run it manually once from the Actions tab to verify.
 
-**Why the workflow is reliable:** serverless hosts cap function runtime (Vercel Hobby ≈ 60s) and a full pass over 118 boards takes longer than that, which would 504. So cron scans are **budgeted and resumable** — each run scans as many boards as fit inside `SCAN_BUDGET_MS` (default 40s), saves a cursor, and the next run picks up where it left off, cycling through everything roughly hourly. The workflow itself retries up to 3 times, follows redirects, and fails loudly with a clear message on 401 (secret mismatch) or 404 (bad `APP_URL`).
+**Why the workflow is reliable:** serverless hosts cap function runtime (Vercel Hobby ≈ 60s) and a full pass over 118 boards takes longer than that, which would 504. So cron scans are **budgeted and resumable** — each run scans as many boards as fit inside `SCAN_BUDGET_MS` (default 30s, with the tail reserved for link checks), saves a cursor, and the next run picks up where it left off, cycling through everything roughly hourly. Writes are batched per company (2 round-trips per 100 postings, not 2 per posting) — against Turso every statement is an HTTP call, so the per-job version was what pushed runs past the 60s function limit. The workflow itself retries up to 3 times, follows redirects, and fails loudly with a clear message on 401 (secret mismatch) or 404 (bad `APP_URL`).
 
 ### 5. Notifications
 

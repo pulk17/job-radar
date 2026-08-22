@@ -118,32 +118,47 @@ export interface UpsertJobInput {
   match_score?: number;
 }
 
-/** Returns true if the job is new */
-export async function upsertJob(job: UpsertJobInput): Promise<boolean> {
-  const existing = await run('SELECT id FROM jobs WHERE id = ?', [job.id]);
-  if (existing.rows.length > 0) {
-    await run(
-      `UPDATE jobs SET last_seen=datetime('now'), is_active=1,
-        title=?, location=?, department=?, apply_url=?,
-        role_type=?, languages=?, region=?, matched_keywords=?, min_experience=?, match_score=?
-       WHERE id=?`,
-      [job.title, job.location || null, job.department || null, job.apply_url,
-       job.role_type || 'fulltime', job.languages || '', job.region || 'india',
-       job.matched_keywords || '', job.min_experience ?? null, job.match_score || 0, job.id]
-    );
-    return false;
-  }
-  await run(
-    `INSERT INTO jobs (id,company,tier,title,location,department,apply_url,salary_range,
+const UPSERT_SQL = `INSERT INTO jobs (id,company,tier,title,location,department,apply_url,salary_range,
       ats_platform,role_type,languages,region,matched_keywords,min_experience,match_score)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    [job.id, job.company, job.tier, job.title, job.location || null,
-     job.department || null, job.apply_url, job.salary_range || null,
-     job.ats_platform || null, job.role_type || 'fulltime', job.languages || '',
-     job.region || 'india', job.matched_keywords || '', job.min_experience ?? null,
-     job.match_score || 0]
-  );
-  return true;
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+     ON CONFLICT(id) DO UPDATE SET
+       last_seen=datetime('now'), is_active=1,
+       title=excluded.title, location=excluded.location, department=excluded.department,
+       apply_url=excluded.apply_url, role_type=excluded.role_type, languages=excluded.languages,
+       region=excluded.region, matched_keywords=excluded.matched_keywords,
+       min_experience=excluded.min_experience, match_score=excluded.match_score`;
+
+/**
+ * Upsert one company's jobs and report which ids are new.
+ *
+ * Two round-trips per 100 jobs, not two per job. Against a local SQLite file the
+ * per-job version was free; against Turso every statement is an HTTP call, so a
+ * cold scan of ~20k postings meant ~40k round-trips and a serverless timeout.
+ * Deliberately does not touch `status` — a job you ticked off stays ticked off.
+ */
+export async function upsertJobs(jobs: UpsertJobInput[]): Promise<Set<string>> {
+  const created = new Set<string>();
+  if (jobs.length === 0) return created;
+  await init();
+  const c = getClient();
+
+  for (let i = 0; i < jobs.length; i += 100) {
+    const chunk = jobs.slice(i, i + 100);
+    const existing = await c.execute({
+      sql: `SELECT id FROM jobs WHERE id IN (${chunk.map(() => '?').join(',')})`,
+      args: chunk.map(j => j.id),
+    });
+    const known = new Set(existing.rows.map(r => r.id as string));
+    await c.batch(chunk.map(j => ({
+      sql: UPSERT_SQL,
+      args: [j.id, j.company, j.tier, j.title, j.location || null, j.department || null,
+        j.apply_url, j.salary_range || null, j.ats_platform || null, j.role_type || 'fulltime',
+        j.languages || '', j.region || 'india', j.matched_keywords || '',
+        j.min_experience ?? null, j.match_score || 0] as InValue[],
+    })), 'write');
+    for (const j of chunk) if (!known.has(j.id)) created.add(j.id);
+  }
+  return created;
 }
 
 export async function markInactiveJobs(company: string, activeIds: string[]): Promise<void> {

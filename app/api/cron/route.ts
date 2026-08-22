@@ -11,7 +11,10 @@ import { runScanAndNotify } from '@/lib/scan-runner';
 
 export const maxDuration = 60;
 
-const DEFAULT_BUDGET_MS = 40_000;
+// Leaves room for the in-flight batch to land (ATS fetches abort at 12s) plus the
+// link-check tail, inside maxDuration. Raise via SCAN_BUDGET_MS on a plan with a
+// longer function limit.
+const DEFAULT_BUDGET_MS = 30_000;
 
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
@@ -33,7 +36,7 @@ export async function GET(req: NextRequest) {
       resumable: true,
       budgetMs,
       // Link checks are optional work; skip them on tight budgets.
-      checkLinksBatch: budgetMs >= 60_000 ? 40 : 12,
+      checkLinksBatch: budgetMs >= 60_000 ? 40 : 8,
     });
     console.log(`[cron] scanned=${r.scanned}/${r.totalCompanies} new=${r.newJobsFound} notified=${r.notified} complete=${r.complete} nextCursor=${r.nextCursor}`);
     return NextResponse.json({

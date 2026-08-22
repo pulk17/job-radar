@@ -37,13 +37,18 @@ export function runScanAndNotify(opts: RunOptions = {}): Promise<ScanRunResult> 
 
 async function doScan(opts: RunOptions): Promise<ScanRunResult> {
   const { resumable = false, budgetMs = 0, checkLinksBatch = 40 } = opts;
+  const startedAt = Date.now();
 
   let cursor = opts.cursor ?? 0;
   if (resumable && opts.cursor === undefined) {
     cursor = Number(await getMeta(CURSOR_KEY)) || 0;
   }
 
-  const scan = await runFullScan({ budgetMs, cursor });
+  // Reserve the tail of the budget for link checks, otherwise the scan eats the
+  // whole thing and they never run.
+  const linkReserveMs = checkLinksBatch > 0 ? Math.min(8000, checkLinksBatch * 1500) : 0;
+  const scanBudget = budgetMs > 0 ? Math.max(5000, budgetMs - linkReserveMs) : 0;
+  const scan = await runFullScan({ budgetMs: scanBudget, cursor });
   if (resumable) await setMeta(CURSOR_KEY, String(scan.nextCursor));
 
   // Notify from the DB (notified_at IS NULL) rather than only this scan's
@@ -67,8 +72,11 @@ async function doScan(opts: RunOptions): Promise<ScanRunResult> {
     }
   }
 
-  const links = checkLinksBatch > 0
-    ? await checkLinks(checkLinksBatch)
-    : { checked: 0, dead: 0 };
+  // Link checking is the optional tail of the run. It used to start no matter how
+  // long the scan took, which is how a budgeted run still hit the platform timeout —
+  // so it only gets whatever the scan actually left (~1.5s per link, 5 at a time).
+  const leftMs = budgetMs > 0 ? budgetMs - (Date.now() - startedAt) : Infinity;
+  const batch = Math.min(checkLinksBatch, Math.floor(leftMs / 1500));
+  const links = batch > 0 ? await checkLinks(batch) : { checked: 0, dead: 0 };
   return { ...scan, notified, linksChecked: links.checked, deadLinks: links.dead };
 }

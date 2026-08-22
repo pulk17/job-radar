@@ -5,7 +5,7 @@ async function checkUrl(url: string): Promise<number> {
   try {
     const res = await fetch(url, {
       method: 'HEAD',
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(5000),
       headers: { 'User-Agent': 'Mozilla/5.0 (compatible; JobRadar/2.0; link-checker)' },
       redirect: 'follow',
     });
@@ -15,7 +15,7 @@ async function checkUrl(url: string): Promise<number> {
     // Some sites block HEAD, try GET
     const getRes = await fetch(url, {
       method: 'GET',
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(5000),
       headers: {
         'User-Agent': 'Mozilla/5.0 (compatible; JobRadar/2.0; link-checker)',
         'Range': 'bytes=0-0',
