@@ -1,8 +1,9 @@
-// Role matching v2 — India + Singapore, JD-content scoring, YoE extraction.
-// Profile: C++, TypeScript/Next.js, Python, Go, CP, low-latency systems, 0 YOE.
-import { TIER_FOCUS, type Tier } from './companies';
+// Role matching v3 — India + Singapore, tuned for a student hunting internships
+// and new-grad roles. Profile: C++, TypeScript/Next.js, Python, Go, CP, 0 YOE.
+// Dependency-free on purpose: `node scripts/check-matcher.mjs` runs it directly.
 
 export type Region = 'india' | 'singapore' | 'remote' | 'other';
+export type RoleType = 'intern' | 'newgrad' | 'fulltime';
 
 const INDIA_LOCATIONS = [
   'india', 'bangalore', 'bengaluru', 'hyderabad', 'mumbai', 'pune',
@@ -40,18 +41,13 @@ export function detectRegion(location?: string, title?: string): Region {
   return 'other';
 }
 
-export function isTargetRegion(location?: string, title?: string): boolean {
-  return detectRegion(location, title) !== 'other';
-}
-
 // ── Keyword banks ──
 
 const POSITIVE_TITLE = [
   'intern', 'internship', 'new grad', 'new graduate', 'entry level', 'entry-level',
-  'junior', 'associate', 'analyst', 'fresher', 'campus', 'early career', 'early in career',
-  'graduate', 'trainee', 'apprentice', 'co-op', 'coop', 'university',
+  'junior', 'fresher', 'campus', 'early career', 'graduate', 'trainee', 'university',
   'software engineer', 'software developer', 'sde', 'swe', 'member of technical staff',
-  'quant', 'quantitative', 'trading', 'trader', 'research engineer',
+  'quant', 'quantitative', 'research engineer',
   'developer', 'systems engineer', 'platform engineer',
   'full stack', 'fullstack', 'full-stack',
   'backend', 'back-end', 'back end', 'frontend', 'front-end',
@@ -69,15 +65,6 @@ const POSITIVE_STACK = [
   'network programming', 'tcp/ip', 'performance optimization',
 ];
 
-// Title words that immediately signal wrong seniority or wrong function
-const NEGATIVE_TITLE = [
-  'senior', 'staff', 'principal', 'lead', 'manager', 'director', 'distinguished',
-  'vp', 'vice president', 'head of', 'chief', 'architect',
-  'sales', 'account executive', 'recruiter', 'marketing', 'legal', 'counsel',
-  'hr ', 'human resources', 'finance analyst', 'accountant', 'payroll',
-  'administrative', 'executive assistant', 'customer success', 'support engineer ii',
-];
-
 /**
  * A title must show at least one of these to be considered a software role.
  * Without this, "Financial Analyst Intern" or "Trainee - Recruitment Coordinator"
@@ -86,14 +73,14 @@ const NEGATIVE_TITLE = [
 const ENGINEERING_TITLE = new RegExp(
   '\\b(engineer|engineering|developer|development|programmer|sde|swe|sre|devops|' +
   'scientist|research|quant|quantitative|trader|trading|software|technolog\\w*|' +
-  'technical staff|data|machine learning|ml|ai|analytics|platform|infrastructure|' +
+  'technical staff|mts|data|machine learning|ml|ai|analytics|platform|infrastructure|' +
   'backend|back-end|frontend|front-end|full.?stack|mobile|android|ios|web|cloud|' +
   'security|cyber|network|system|systems|firmware|embedded|silicon|hardware|' +
-  'verification|validation|compiler|database|devrel|qa|test|testing|tester|' +
+  'verification|validation|compiler|database|qa|test|testing|tester|' +
   'automation|robotics|graphics|computer vision|nlp|it)\\b', 'i'
 );
 
-// Roles that are clearly not software even when they contain an engineering-ish word
+// Roles that are clearly not software work even when they contain an engineering-ish word.
 const NON_TECH_TITLE = new RegExp(
   '\\b(sales|account executive|account manager|business development|recruiter|' +
   'recruiting|recruitment|talent acquisition|human resources|hr|people operations|' +
@@ -103,7 +90,15 @@ const NON_TECH_TITLE = new RegExp(
   'technical account manager|solution consultant|solutions consultant|presales|' +
   'pre-sales|procurement|supply chain|logistics|warehouse|category|merchandising|' +
   'facilities|administrative|executive assistant|office manager|receptionist|' +
-  'teacher|trainer|instructor|nurse|physician|driver|apprentice|coordinator)\\b', 'i'
+  'teacher|trainer|instructor|nurse|physician|driver|coordinator|' +
+  // customer-facing "engineer" titles that aren't software development
+  'support engineer|technical support|support engineering|escalation|helpdesk|help desk|' +
+  'customer engineer|solutions? engineer|solutions? architect|sales engineer|field engineer|' +
+  'implementation|onboarding|deployment strategist|success|customer experience|' +
+  'technician|business analyst|business systems analyst|' +
+  // people management and go-to-market — never a student's role
+  'manager|mgr|director|head of|vp|vice president|chief|president|partner|' +
+  'representative|strategist|policy|billing)\\b', 'i'
 );
 
 // Content phrases signalling senior-only roles
@@ -112,37 +107,66 @@ const NEGATIVE_CONTENT = [
   'people management experience', 'security clearance', 'us persons only',
 ];
 
+const INTERN_TITLE = /\bintern\b|\binternship\b|\bco-?op\b|\bapprentice(ship)?\b|\btrainee\b|\bsummer (analyst|associate|program)\b/i;
+const NEWGRAD_TITLE = new RegExp(
+  '\\b(new grads?|new graduates?|graduate|graduates|grad|entry.level|campus|fresher|freshers|' +
+  'early career|early.in.career|university|junior|jr\\.?|associate (software|engineer|developer|sde|data)|' +
+  'class of 20\\d\\d|20\\d\\d start)\\b', 'i'
+);
+
 /**
- * Extract minimum years-of-experience required from JD text.
- * Returns null if nothing detected.
+ * Minimum years of experience a title implies from its level marker, or null
+ * when the title carries no level. "SDE II" → 2, "Engineer III" → 4, "Sr" → 5.
+ * Level I / 1 (SDE I, MTS-1, Engineer 1) is entry level → 0.
+ */
+export function titleLevel(title: string): number | null {
+  const t = title.toLowerCase();
+  if (/\b(principal|distinguished|architect)\b|(?<!technical )\bstaff\b/.test(t)) return 8;
+  if (/\b(senior|sr\.?|lead|sse)\b/.test(t)) return 5;
+  if (/\bintermediate\b|\bmid.level\b/.test(t)) return 3;
+  // Numeral straight after the role noun: "Engineer II", "SDE-2", "MTS 1", "Staff - II"
+  const m = t.match(/\b(?:engineer|developer|sde|swe|scientist|analyst|mts|staff|programmer)\s*[-,]?\s*(iv|iii|ii|i|[1-4])\b/);
+  if (m) return ({ i: 0, '1': 0, ii: 2, '2': 2, iii: 4, '3': 4, iv: 6, '4': 6 } as Record<string, number>)[m[1]];
+  return null;
+}
+
+/**
+ * Required years of experience stated in a JD, or null if none.
+ *
+ * Uses the *largest* stated minimum ("5+ years overall, 2+ years in Go" → 5) and
+ * ignores preferred/bonus sections, so a senior role isn't mistaken for an entry
+ * one because it also mentions "1+ year of Kubernetes". A number only counts
+ * when it reads as experience, not "founded 20 years ago".
  */
 export function extractMinExperience(text: string): number | null {
-  const t = text.toLowerCase();
-  let min: number | null = null;
-  // "3+ years", "3-5 years", "at least 4 years", "minimum of 5 years", "5 yrs"
-  const patterns = [
-    /(\d{1,2})\s*\+\s*(?:years|yrs)/g,
-    /(\d{1,2})\s*(?:-|–|to)\s*\d{1,2}\s*(?:years|yrs)/g,
-    /(?:at least|minimum(?: of)?|min\.?)\s*(\d{1,2})\s*(?:years|yrs)/g,
-    /(\d{1,2})\s*(?:years|yrs)(?:'|’)?\s*(?:of\s*)?(?:relevant\s*|professional\s*|industry\s*|work(?:ing)?\s*)?experience/g,
-  ];
-  for (const re of patterns) {
-    let m;
-    while ((m = re.exec(t))) {
-      const n = parseInt(m[1], 10);
-      if (n >= 0 && n <= 20) min = min === null ? n : Math.min(min, n);
-    }
-  }
-  // Explicit freshness signals override
-  if (/\b(0-\d|no prior experience|freshers?|new grad|recent graduate)\b/.test(t)) {
+  let t = text.toLowerCase();
+  const cut = t.search(/preferred qualifications|preferred skills|nice to have|good to have|bonus points|preferred:/);
+  if (cut > 0) t = t.slice(0, cut);
+
+  if (/\b0\s*(-|–|to)\s*[1-2]\s*(years|yrs)|\bfreshers?\b|\brecent graduates?\b|\bnew grads? (are )?(welcome|encouraged|eligible)|\bno (prior )?experience (is )?required/.test(t)) {
     return 0;
   }
-  return min;
+
+  let max: number | null = null;
+  const re = /(\d{1,2})\s*(?:\+|plus)?\s*(?:(?:-|–|to)\s*\d{1,2}\s*)?(?:years?|yrs?)\b(.{0,60})/g;
+  let m;
+  while ((m = re.exec(t))) {
+    const n = parseInt(m[1], 10);
+    const after = m[2];
+    const before = t.slice(Math.max(0, m.index - 40), m.index);
+    // In a JD, "N years" is almost always an experience ask; skip only the
+    // phrasings that clearly aren't (company history, degree length, contract term).
+    const saysExperience = /experience|exp\b/.test(after) || /experience|minimum|at least|min\./.test(before);
+    if (!saysExperience && /\b(ago|old|history|founded|combined|warranty|degree|programm?e?|course|contract|tenure|duration|legacy|journey|since|over the (past|last))\b/.test(before + after.slice(0, 30))) continue;
+    if (n <= 20) max = max === null ? n : Math.max(max, n);
+  }
+  return max;
 }
 
 export interface MatchResult {
-  score: number;          // 0..1, or -1 if out of target region
+  score: number;          // 0..1, or -1 if out of target region / not a software role
   region: Region;
+  roleType: RoleType;
   matchedKeywords: string[];
   minExperience: number | null;
 }
@@ -150,27 +174,50 @@ export interface MatchResult {
 export const MATCH_THRESHOLD = 0.15;
 
 function stripHtml(html: string): string {
+  // Greenhouse ships entity-escaped HTML ("&lt;p&gt;"), so decode before stripping tags.
   return html
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&')
     .replace(/<[^>]*>/g, ' ')
-    .replace(/&[a-z]+;/gi, ' ')
-    .replace(/&#?\w+;/gi, ' ')
+    .replace(/&#?\w+;/g, ' ')
     .replace(/\s+/g, ' ');
 }
 
-export function matchJob(title: string, location?: string, department?: string, content?: string, tier?: Tier): MatchResult {
+/**
+ * @param focusBoost  tier weighting from lib/companies.ts TIER_FOCUS
+ * @param levelHint   the source's own career-level tag (Google's "Early" filter,
+ *                    TikTok's "Intern"/"Graduate" recruit type) — beats title parsing
+ */
+export function matchJob(
+  title: string, location?: string, department?: string, content?: string,
+  focusBoost = 0, levelHint?: RoleType,
+): MatchResult {
   const region = detectRegion(location, title);
-  if (region === 'other') return { score: -1, region, matchedKeywords: [], minExperience: null };
+  const reject = (): MatchResult => ({ score: -1, region, roleType: 'fulltime', matchedKeywords: [], minExperience: null });
+  if (region === 'other') return reject();
 
   const titleLower = title.toLowerCase();
 
   // Hard gate: must look like a software role, and must not be a clearly
-  // non-technical one. Keeps the list to JDs actually worth applying to.
-  if (!ENGINEERING_TITLE.test(titleLower) || NON_TECH_TITLE.test(titleLower)) {
-    return { score: -1, region, matchedKeywords: [], minExperience: null };
-  }
+  // non-technical or people-management one.
+  if (!ENGINEERING_TITLE.test(titleLower) || NON_TECH_TITLE.test(titleLower)) return reject();
 
   const body = content ? stripHtml(content).toLowerCase() : '';
   const fullText = `${titleLower} ${(department || '').toLowerCase()} ${body}`;
+
+  // Seniority: the stricter of what the title's level implies and what the JD asks for.
+  const fromTitle = titleLevel(title);
+  const fromBody = extractMinExperience(`${titleLower} ${body}`);
+  let minExperience = fromTitle === null ? fromBody : fromBody === null ? fromTitle : Math.max(fromTitle, fromBody);
+
+  let roleType: RoleType;
+  if (levelHint) roleType = levelHint;
+  else if (INTERN_TITLE.test(titleLower)) roleType = 'intern';
+  else if ((minExperience ?? 0) >= 2) roleType = 'fulltime';        // "Senior New Grad Mentor" is still senior
+  else if (NEWGRAD_TITLE.test(titleLower) || minExperience !== null) roleType = 'newgrad'; // explicit, or ≤1 yr asked
+  else roleType = 'fulltime';                                        // no level signal at all: "open level"
+  // A source that says "early career" (Google SWE II = L3) outranks the numeral.
+  if (levelHint && minExperience !== null && minExperience > 1) minExperience = 1;
+
   const matched = new Set<string>();
   let score = 0;
 
@@ -184,68 +231,37 @@ export function matchJob(title: string, location?: string, department?: string, 
   stackHits.forEach(kw => matched.add(kw));
   score += Math.min(stackHits.length * 0.04, 0.25);
 
-  // 3. Career-stage boost from title
-  if (/intern|new grad|entry.level|campus|fresher|trainee|graduate|university|early career/i.test(titleLower)) {
-    score += 0.20;
-  } else if (/junior|associate\b/i.test(titleLower)) {
-    score += 0.12;
-  } else if (!/senior|staff|principal|lead|manager|director|architect|distinguished/i.test(titleLower)) {
-    score += 0.05;
-  }
+  // 3. Career stage — the thing a student cares about most
+  if (roleType !== 'fulltime') score += 0.22;
 
   // 4. Department fit
   if (department && /engineering|technology|quant|research|development|platform|infrastructure|trading/i.test(department)) {
     score += 0.08;
   }
 
-  // 5. Base for being in a target region
-  score += 0.10;
+  // 5. Base for being in a target region, plus tier focus
+  score += 0.10 + focusBoost;
   if (region === 'india') score += 0.02; // slight home-region preference
 
-  // 5b. Focus weighting — big tech & startups rank above quant/banking/hardware
-  if (tier) score += TIER_FOCUS[tier] ?? 0;
+  // 6. Wrong-fit penalties
+  score -= NEGATIVE_CONTENT.filter(kw => fullText.includes(kw)).length * 0.10;
+  if (/\bph\.?d\b/.test(titleLower)) score -= 0.30;  // PhD-only intern/research tracks
 
-  // 6. Seniority / wrong-function penalties
-  // "Member of Technical Staff" is the standard *entry* title at AI labs
-  // (OpenAI, Anthropic, Sarvam) — don't let the generic "staff" rule bury it.
-  const isMts = /member of technical staff/i.test(titleLower);
-  const negTitleHits = NEGATIVE_TITLE.filter(kw =>
-    titleLower.includes(kw) && !(isMts && kw === 'staff')
-  );
-  score -= negTitleHits.length * 0.20;
-  const negContentHits = NEGATIVE_CONTENT.filter(kw => fullText.includes(kw));
-  score -= negContentHits.length * 0.10;
-
-  // 7. Years-of-experience penalty (profile: 0 YOE)
-  const minExperience = extractMinExperience(`${titleLower} ${body}`);
+  // 7. Experience asked vs a student's 0 years
   if (minExperience !== null) {
-    if (minExperience >= 5) score -= 0.35;
-    else if (minExperience >= 3) score -= 0.20;
-    else if (minExperience >= 2) score -= 0.08;
-    else score += 0.05; // 0-1 years explicitly OK
+    if (minExperience >= 5) score -= 0.45;
+    else if (minExperience >= 3) score -= 0.30;
+    else if (minExperience >= 2) score -= 0.15;
+    else score += 0.05; // 0–1 years explicitly OK
   }
 
   return {
     score: Math.max(0, Math.min(1, score)),
     region,
+    roleType,
     matchedKeywords: [...matched].slice(0, 12),
     minExperience,
   };
-}
-
-// ── Role type classification ──
-
-export type RoleType = 'intern' | 'newgrad' | 'fulltime';
-
-export function classifyRoleType(title: string): RoleType {
-  const t = title.toLowerCase();
-  if (/\bintern\b|\binternship\b|\bco-?op\b|\bapprentice\b|\btrainee\b|\bsummer\b.*\b(analyst|associate|program)\b/i.test(t)) {
-    return 'intern';
-  }
-  if (/\bnew grad\b|\bnew graduate\b|\bentry.level\b|\bcampus\b|\bfresher\b|\bearly career\b|\bgraduate\b.*\b(engineer|developer|program|analyst)\b|\buniversity\b|\bcampus hire\b/i.test(t)) {
-    return 'newgrad';
-  }
-  return 'fulltime';
 }
 
 // ── Language detection ──

@@ -55,6 +55,12 @@ async function init(): Promise<void> {
           key TEXT PRIMARY KEY,
           value TEXT
         );
+        CREATE TABLE IF NOT EXISTS push_subscriptions (
+          endpoint   TEXT PRIMARY KEY,
+          p256dh     TEXT NOT NULL,
+          auth       TEXT NOT NULL,
+          created_at TEXT DEFAULT (datetime('now'))
+        );
         CREATE TABLE IF NOT EXISTS scan_history (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           company TEXT NOT NULL,
@@ -173,13 +179,6 @@ export async function markInactiveJobs(company: string, activeIds: string[]): Pr
   );
 }
 
-export interface JobFilters {
-  tier?: string; search?: string; active?: boolean;
-  bookmarked?: boolean; statusFilter?: string;
-  roleType?: string; languages?: string[]; region?: string;
-  sort?: string; order?: string;
-}
-
 const JOB_COLUMNS = `id,company,tier,title,location,department,apply_url,salary_range,
   ats_platform,role_type,languages,region,matched_keywords,min_experience,
   first_seen,last_seen,is_active,match_score,is_bookmarked,status,notes,
@@ -204,67 +203,14 @@ export async function getAllJobs(limit = 4000, expiredWithinDays = 21): Promise<
   return res.rows as unknown as JobRow[];
 }
 
-export async function getJobs(filters: JobFilters): Promise<JobRow[]> {
-  const conds: string[] = [];
-  const params: InValue[] = [];
-
-  if (filters.tier && filters.tier !== 'all') { conds.push('tier=?'); params.push(filters.tier); }
-  if (filters.search) {
-    conds.push('(title LIKE ? OR company LIKE ? OR location LIKE ? OR notes LIKE ?)');
-    const s = `%${filters.search}%`; params.push(s, s, s, s);
-  }
-  if (filters.active !== undefined) { conds.push('is_active=?'); params.push(filters.active ? 1 : 0); }
-  if (filters.bookmarked) conds.push('is_bookmarked=1');
-  if (filters.statusFilter && filters.statusFilter !== 'all') {
-    if (filters.statusFilter === 'applied_any') conds.push("status != 'not_applied'");
-    else { conds.push('status=?'); params.push(filters.statusFilter); }
-  }
-  if (filters.roleType && filters.roleType !== 'all') { conds.push('role_type=?'); params.push(filters.roleType); }
-  if (filters.region && filters.region !== 'all') { conds.push('region=?'); params.push(filters.region); }
-  if (filters.languages && filters.languages.length > 0) {
-    conds.push(`(${filters.languages.map(() => 'languages LIKE ?').join(' OR ')})`);
-    for (const l of filters.languages) params.push(`%${l}%`);
-  }
-
-  const where = conds.length > 0 ? `WHERE ${conds.join(' AND ')}` : '';
-  const validSorts: Record<string, string> = {
-    score: 'match_score', date: 'first_seen', company: 'company', title: 'title', salary: 'salary_range',
-  };
-  const sortCol = validSorts[filters.sort || ''] || 'match_score';
-  const sortDir = filters.order === 'asc' ? 'ASC' : 'DESC';
-  const res = await run(
-    `SELECT ${JOB_COLUMNS} FROM jobs ${where} ORDER BY ${sortCol} ${sortDir}, first_seen DESC LIMIT 1000`,
-    params
-  );
-  return res.rows as unknown as JobRow[];
-}
-
 export async function getStats() {
-  // Single pass instead of 9 sequential COUNT round-trips.
-  const res = await run(`
-    SELECT
-      SUM(is_active) as active,
-      COUNT(*) as total,
-      SUM(is_bookmarked) as bookmarked,
-      SUM(CASE WHEN status NOT IN ('not_applied','not_interested') THEN 1 ELSE 0 END) as applied,
-      SUM(CASE WHEN status='not_interested' THEN 1 ELSE 0 END) as dismissed,
-      SUM(CASE WHEN date(first_seen)=date('now') THEN 1 ELSE 0 END) as newToday,
-      SUM(CASE WHEN link_status=0 AND is_active=1 THEN 1 ELSE 0 END) as deadLinks,
-      SUM(CASE WHEN role_type='intern' AND is_active=1 THEN 1 ELSE 0 END) as interns,
-      SUM(CASE WHEN role_type='newgrad' AND is_active=1 THEN 1 ELSE 0 END) as newgrad,
-      SUM(CASE WHEN region='india' AND is_active=1 THEN 1 ELSE 0 END) as india,
-      SUM(CASE WHEN region='singapore' AND is_active=1 THEN 1 ELSE 0 END) as singapore
-    FROM jobs
-  `);
-  const r = res.rows[0] || {};
-  const n = (k: string) => Number(r[k] ?? 0);
-  const lastScanRes = await run('SELECT MAX(scanned_at) as t FROM scan_history');
+  const [total, lastScan] = await Promise.all([
+    run('SELECT COUNT(*) as n FROM jobs'),
+    run('SELECT MAX(scanned_at) as t FROM scan_history'),
+  ]);
   return {
-    active: n('active'), total: n('total'), bookmarked: n('bookmarked'),
-    applied: n('applied'), dismissed: n('dismissed'), newToday: n('newToday'), deadLinks: n('deadLinks'),
-    interns: n('interns'), newgrad: n('newgrad'),
-    india: n('india'), singapore: n('singapore'),
-    lastScan: (lastScanRes.rows[0]?.t as string | null) || null,
+    total: Number(total.rows[0]?.n ?? 0),
+    lastScan: (lastScan.rows[0]?.t as string | null) || null,
   };
 }
 
@@ -342,10 +288,16 @@ export async function getAvailableLanguages() {
   return Object.entries(counts).map(([language, count]) => ({ language, count })).sort((a, b) => b.count - a.count);
 }
 
-/** New active jobs that have not been notified yet (for Telegram/ntfy alerts) */
+/**
+ * New jobs worth an alert: active, not ticked off, and early career (intern /
+ * new grad). Open-level and experienced roles still show in the app, they just
+ * don't buzz your phone.
+ */
 export async function getUnnotifiedJobs(minScore = 0.3, limit = 25): Promise<JobRow[]> {
   const res = await run(
-    `SELECT ${JOB_COLUMNS} FROM jobs WHERE notified_at IS NULL AND is_active=1 AND status='not_applied' AND match_score>=?
+    `SELECT ${JOB_COLUMNS} FROM jobs
+     WHERE notified_at IS NULL AND is_active=1 AND status='not_applied'
+       AND role_type IN ('intern','newgrad') AND match_score>=?
      ORDER BY match_score DESC LIMIT ?`, [minScore, limit]);
   return res.rows as unknown as JobRow[];
 }
@@ -374,4 +326,33 @@ export async function exportJobsCsv(): Promise<string> {
     return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
   };
   return [headers.join(','), ...jobs.map(r => headers.map(h => escape(r[h])).join(','))].join('\n');
+}
+
+export async function hasAnyJobs(company: string): Promise<boolean> {
+  const res = await run('SELECT 1 FROM jobs WHERE company=? LIMIT 1', [company]);
+  return res.rows.length > 0;
+}
+
+/** Store a value only if the key is unset; returns whatever ends up stored (first writer wins). */
+export async function getOrSetMeta(key: string, make: () => string): Promise<string> {
+  await run('INSERT INTO meta (key,value) VALUES (?,?) ON CONFLICT(key) DO NOTHING', [key, make()]);
+  return (await getMeta(key))!;
+}
+
+export interface PushSubscriptionRow { endpoint: string; p256dh: string; auth: string; }
+
+export async function savePushSubscription(sub: PushSubscriptionRow) {
+  await run(
+    `INSERT INTO push_subscriptions (endpoint,p256dh,auth) VALUES (?,?,?)
+     ON CONFLICT(endpoint) DO UPDATE SET p256dh=excluded.p256dh, auth=excluded.auth`,
+    [sub.endpoint, sub.p256dh, sub.auth]);
+}
+
+export async function deletePushSubscription(endpoint: string) {
+  await run('DELETE FROM push_subscriptions WHERE endpoint=?', [endpoint]);
+}
+
+export async function getPushSubscriptions(): Promise<PushSubscriptionRow[]> {
+  const res = await run('SELECT endpoint,p256dh,auth FROM push_subscriptions');
+  return res.rows as unknown as PushSubscriptionRow[];
 }

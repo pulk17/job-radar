@@ -2,7 +2,7 @@
 import { runFullScan, ScanSummary, ScanOptions } from './adapters/fetcher';
 import { checkLinks } from './link-checker';
 import { getUnnotifiedJobs, markNotified, getMeta, setMeta } from './db';
-import { notifyNewJobs, notificationChannels } from './notify';
+import { notifyNewJobs, notificationChannels, anyChannel } from './notify';
 
 const CURSOR_KEY = 'scan_cursor';
 
@@ -54,8 +54,7 @@ async function doScan(opts: RunOptions): Promise<ScanRunResult> {
   // Notify from the DB (notified_at IS NULL) rather than only this scan's
   // in-memory list, so jobs missed during a failed notification are retried.
   let notified = 0;
-  const channels = notificationChannels();
-  if (channels.telegram || channels.ntfy) {
+  if (anyChannel(await notificationChannels())) {
     const pending = await getUnnotifiedJobs(0.25, 40);
     if (pending.length > 0) {
       const ok = await notifyNewJobs(

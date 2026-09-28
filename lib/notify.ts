@@ -1,15 +1,22 @@
-// Free notification channels: Telegram bot + ntfy.sh.
-// Configure via env:
-//   TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID  → Telegram push
-//   NTFY_TOPIC                             → ntfy.sh push (subscribe in the ntfy app)
+// Notification channels, all free:
+//   Web Push (primary)  → tap "Enable alerts" in the app on each device; zero config
+//   Telegram (optional) → TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID
+//   ntfy.sh  (optional) → NTFY_TOPIC
 import { NewJobInfo } from './adapters/fetcher';
+import { getPushSubscriptions } from './db';
+import { sendPush } from './push';
 
-export function notificationChannels(): { telegram: boolean; ntfy: boolean } {
+export interface Channels { push: number; telegram: boolean; ntfy: boolean; }
+
+export async function notificationChannels(): Promise<Channels> {
   return {
+    push: (await getPushSubscriptions()).length,
     telegram: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID),
     ntfy: Boolean(process.env.NTFY_TOPIC),
   };
 }
+
+export const anyChannel = (c: Channels) => c.push > 0 || c.telegram || c.ntfy;
 
 async function sendTelegram(text: string): Promise<boolean> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -35,12 +42,7 @@ async function sendNtfy(title: string, body: string, clickUrl?: string): Promise
   try {
     const res = await fetch(`https://ntfy.sh/${topic}`, {
       method: 'POST',
-      headers: {
-        'Title': title,
-        'Priority': 'high',
-        'Tags': 'briefcase',
-        ...(clickUrl ? { 'Click': clickUrl } : {}),
-      },
+      headers: { 'Title': title, 'Priority': 'high', 'Tags': 'briefcase', ...(clickUrl ? { 'Click': clickUrl } : {}) },
       body,
       signal: AbortSignal.timeout(15000),
     });
@@ -52,36 +54,44 @@ async function sendNtfy(title: string, body: string, clickUrl?: string): Promise
 }
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const flag = (r: string) => r === 'singapore' ? '🇸🇬' : r === 'remote' ? '🌐' : '🇮🇳';
+const badge = (t: string) => t === 'intern' ? 'Intern' : t === 'newgrad' ? 'New grad' : '';
 
 /** Send a digest of new jobs. Returns true if at least one channel accepted it. */
 export async function notifyNewJobs(jobs: NewJobInfo[], appUrl?: string): Promise<boolean> {
   if (jobs.length === 0) return false;
   const top = jobs.slice(0, 12);
-  const flag = (r: string) => r === 'singapore' ? '🇸🇬' : r === 'remote' ? '🌐' : '🇮🇳';
-  const badge = (t: string) => t === 'intern' ? ' [INTERN]' : t === 'newgrad' ? ' [NEW GRAD]' : '';
+  const title = jobs.length === 1
+    ? `${top[0].company} · ${badge(top[0].roleType) || 'new role'}`
+    : `${jobs.length} new early-career roles`;
 
-  const tgLines = top.map(j =>
-    `${flag(j.region)} <b>${esc(j.company)}</b>${badge(j.roleType)}\n<a href="${esc(j.applyUrl)}">${esc(j.title)}</a> · ${Math.round(j.score * 100)}%`
-  );
-  const more = jobs.length > top.length ? `\n\n…and ${jobs.length - top.length} more` : '';
-  const tgText = `🎯 <b>${jobs.length} new matched job${jobs.length > 1 ? 's' : ''}</b>\n\n${tgLines.join('\n\n')}${more}${appUrl ? `\n\n<a href="${appUrl}">Open Job Radar</a>` : ''}`;
+  // A phone notification shows ~4 lines, so lead with the best matches.
+  const pushBody = jobs.length === 1
+    ? `${flag(top[0].region)} ${top[0].title}`
+    : top.slice(0, 4).map(j => `${flag(j.region)} ${j.company} — ${j.title}`).join('\n')
+      + (jobs.length > 4 ? `\n+${jobs.length - 4} more` : '');
 
-  const ntfyBody = top.map(j =>
-    `${flag(j.region)} ${j.company}${badge(j.roleType)}: ${j.title} (${Math.round(j.score * 100)}%)`
-  ).join('\n') + (jobs.length > top.length ? `\n…and ${jobs.length - top.length} more` : '');
+  const tgText = `🎯 <b>${esc(title)}</b>\n\n` + top.map(j =>
+    `${flag(j.region)} <b>${esc(j.company)}</b>${badge(j.roleType) ? ` [${badge(j.roleType)}]` : ''}\n<a href="${esc(j.applyUrl)}">${esc(j.title)}</a> · ${Math.round(j.score * 100)}%`
+  ).join('\n\n') + (jobs.length > top.length ? `\n\n…and ${jobs.length - top.length} more` : '')
+    + (appUrl ? `\n\n<a href="${appUrl}">Open Job Radar</a>` : '');
 
-  const [tg, nt] = await Promise.all([
+  const [push, tg, nt] = await Promise.all([
+    // One job → straight to its posting; a batch → the app's inbox.
+    sendPush({ title, body: pushBody, url: jobs.length === 1 ? top[0].applyUrl : '/', tag: 'new-jobs' }),
     sendTelegram(tgText),
-    sendNtfy(`${jobs.length} new matched job${jobs.length > 1 ? 's' : ''}`, ntfyBody, appUrl || top[0].applyUrl),
+    sendNtfy(title, pushBody, appUrl || top[0].applyUrl),
   ]);
-  return tg || nt;
+  return push > 0 || tg || nt;
 }
 
-/** Simple test message to verify channel configuration. */
-export async function sendTestNotification(): Promise<{ telegram: boolean; ntfy: boolean }> {
-  const [telegram, ntfy] = await Promise.all([
-    sendTelegram('✅ Job Radar notifications are working. You will get a digest whenever new matched jobs appear.'),
-    sendNtfy('Job Radar test', 'Notifications are working. You will get a digest whenever new matched jobs appear.'),
+/** Test message to every configured channel. */
+export async function sendTestNotification(): Promise<{ push: number; telegram: boolean; ntfy: boolean }> {
+  const msg = 'Alerts are working. You\'ll get a ping when new internships and new-grad roles appear.';
+  const [push, telegram, ntfy] = await Promise.all([
+    sendPush({ title: 'Job Radar ✓', body: msg, url: '/', tag: 'test' }),
+    sendTelegram(`✅ ${msg}`),
+    sendNtfy('Job Radar test', msg),
   ]);
-  return { telegram, ntfy };
+  return { push, telegram, ntfy };
 }
