@@ -59,7 +59,7 @@ async function doScan(opts: RunOptions): Promise<ScanRunResult> {
     if (pending.length > 0) {
       const ok = await notifyNewJobs(
         pending.map(j => ({
-          company: j.company, title: j.title, location: j.location || '',
+          company: j.company, title: j.reopened_at ? `Reopened: ${j.title}` : j.title, location: j.location || '',
           applyUrl: j.apply_url, score: j.match_score, roleType: j.role_type, region: j.region,
         })),
         process.env.APP_URL

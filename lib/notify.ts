@@ -85,6 +85,17 @@ export async function notifyNewJobs(jobs: NewJobInfo[], appUrl?: string): Promis
   return push > 0 || tg || nt;
 }
 
+/** Pre-careers-page signals: a hiring post or PPO contest is worth a ping of its own. */
+export async function notifySignals(items: Array<{ title: string; org: string; url: string }>): Promise<void> {
+  const title = items.length === 1 ? `New signal${items[0].org ? ` · ${items[0].org}` : ''}` : `${items.length} new hiring signals`;
+  const body = items.slice(0, 4).map(s => s.title).join('\n');
+  await Promise.all([
+    sendPush({ title, body, url: '/?tab=radar', tag: 'signals' }),
+    sendTelegram(`📡 <b>${esc(title)}</b>\n\n` + items.slice(0, 8).map(s => `<a href="${esc(s.url)}">${esc(s.title)}</a>`).join('\n')),
+    sendNtfy(title, body),
+  ]);
+}
+
 /** Test message to every configured channel. */
 export async function sendTestNotification(): Promise<{ push: number; telegram: boolean; ntfy: boolean }> {
   const msg = 'Alerts are working. You\'ll get a ping when new internships and new-grad roles appear.';

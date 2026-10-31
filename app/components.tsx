@@ -11,6 +11,8 @@ export interface Job {
   is_active: number; match_score: number; is_bookmarked: number;
   status: string; notes: string;
   link_status: number; link_checked_at: string | null;
+  batch_fit: string; reopened_at: string | null;
+  elig: string; elig_why: string;
 }
 
 export interface HiringWindow {
@@ -46,10 +48,12 @@ export function timeAgo(d: string): string {
   if (s < 604800) return `${Math.floor(s / 86400)}d`;
   return `${Math.floor(s / 604800)}w`;
 }
-export const isNew = (j: Job) => j.is_active === 1 && Date.now() - parseTs(j.first_seen) < 86400000;
+const ageMs = (j: Job) => Date.now() - parseTs(j.reopened_at || j.first_seen);
+export const isNew = (j: Job) => j.is_active === 1 && ageMs(j) < 86400000;
+export const isRecent = (j: Job) => j.is_active === 1 && ageMs(j) < 3 * 86400000;
 export const levelLabel = (j: Job) =>
-  j.role_type === 'intern' ? 'Intern' : j.role_type === 'newgrad' ? 'New grad'
-    : j.min_experience === null ? 'Open level' : `${j.min_experience}+ yrs`;
+  j.elig === 'no' ? 'Not eligible' : j.elig !== 'yes' ? 'Unclear' : j.role_type === 'intern' ? 'Intern' : 'New grad';
+const levelClass = (j: Job) => j.elig === 'no' ? 'exp' : j.elig !== 'yes' ? 'open' : j.role_type === 'intern' ? 'intern' : 'newgrad';
 /** Company salary bands are per country (₹ for India, S$ for Singapore) — don't show one on the other's jobs. */
 export const payFor = (j: Job) => {
   const s = j.salary_range || '';
@@ -77,6 +81,7 @@ const PATHS: Record<string, ReactNode> = {
   pin: <><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" /><circle cx="12" cy="10" r="3" /></>,
   download: <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />,
   back: <path d="m15 18-6-6 6-6" />,
+  zap: <path d="M13 2 3 14h9l-1 8 10-12h-9z" />,
   sparkle: <path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M5.6 18.4l2.8-2.8M15.6 8.4l2.8-2.8" />,
 };
 export function Icon({ name, size = 18, fill = false }: { name: string; size?: number; fill?: boolean }) {
@@ -90,10 +95,11 @@ export function Avatar({ company, tier, size = 36 }: { company: string; tier: st
   return <span className={`avatar t-${tier}`} style={{ width: size, height: size, fontSize: size * 0.42 }}>{company.replace(/[^A-Za-z0-9]/g, '')[0] || '?'}</span>;
 }
 
-// ── Job card: tap to open, swipe right = applied, swipe left = not interested ──
-export function JobCard({ job, selected, onOpen, onTick, onStar }: {
+// ── Job card: tap to open, swipe right = shortlist, swipe left = not interested ──
+export function JobCard({ job, selected, onOpen, onTick, onStar, onOutreach, onApply }: {
   job: Job; selected: boolean;
   onOpen: () => void; onTick: (status: string) => void; onStar: () => void;
+  onOutreach: () => void; onApply: () => void;
 }) {
   const [dx, setDx] = useState(0);
   const drag = useRef<{ x: number; y: number; active: boolean; locked: boolean } | null>(null);
@@ -122,14 +128,14 @@ export function JobCard({ job, selected, onOpen, onTick, onStar }: {
     const d = drag.current;
     drag.current = null;
     if (!d?.active) return;
-    if (dx > THRESHOLD) onTick('applied');
+    if (dx > THRESHOLD) { if (!job.is_bookmarked) onStar(); }
     else if (dx < -THRESHOLD) onTick('not_interested');
     setDx(0);
   };
 
   return (
     <div className={`card-wrap ${dx > THRESHOLD ? 'arm-right' : dx < -THRESHOLD ? 'arm-left' : ''}`}>
-      <div className="swipe-bg left"><Icon name="check" /> Applied</div>
+      <div className="swipe-bg left"><Icon name="star" /> Shortlist</div>
       <div className="swipe-bg right">Not interested <Icon name="x" /></div>
       <article
         className={`card ${selected ? 'selected' : ''} ${job.is_active ? '' : 'expired'} ${dx ? 'dragging' : ''}`}
@@ -148,8 +154,9 @@ export function JobCard({ job, selected, onOpen, onTick, onStar }: {
         </div>
         <h3 className="card-title">{job.title}</h3>
         <div className="card-meta">
-          <span className={`lvl lvl-${job.role_type === 'fulltime' ? (job.min_experience === null ? 'open' : 'exp') : job.role_type}`}>{levelLabel(job)}</span>
-          {isNew(job) && <span className="new">New</span>}
+          <span className={`lvl lvl-${levelClass(job)}`}>{levelLabel(job)}</span>
+          {job.reopened_at ? <span className="new">Reopened</span> : isNew(job) && <span className="new">New</span>}
+          {job.elig_why && job.elig_why !== 'Intern' && <span className="st">{job.elig_why}</span>}
           {!job.is_active && <span className="gone">Closed</span>}
           {job.status !== 'not_applied' && <span className="st">{statusLabel(job.status)}</span>}
           <span className="where">{flag(job.region)} {shortLoc(job.location)}</span>
@@ -157,16 +164,14 @@ export function JobCard({ job, selected, onOpen, onTick, onStar }: {
         </div>
         {kw.length > 0 && <div className="kw">{kw.map(k => <span key={k}>{k}</span>)}</div>}
         <div className="card-actions" onClick={e => e.stopPropagation()}>
-          <button className={`act ${job.is_bookmarked ? 'on star' : ''}`} onClick={onStar} aria-label={job.is_bookmarked ? 'Unsave' : 'Save'}>
+          <button className={`act ${job.is_bookmarked ? 'on star' : ''}`} onClick={onStar} aria-label={job.is_bookmarked ? 'Remove from shortlist' : 'Shortlist'}>
             <Icon name="star" fill={!!job.is_bookmarked} />
           </button>
-          <button className={`act ${job.status === 'applied' ? 'on ok' : ''}`} onClick={() => onTick('applied')} aria-label="Mark applied">
-            <Icon name="check" /><span>Applied</span>
-          </button>
-          <button className={`act ${job.status === 'not_interested' ? 'on no' : ''}`} onClick={() => onTick('not_interested')} aria-label="Not interested">
+          <button className={`act ${job.status === 'not_interested' ? 'on no' : ''}`} onClick={() => onTick('not_interested')} aria-label="Hide">
             <Icon name="x" /><span>Hide</span>
           </button>
-          <a className="apply" href={job.apply_url} target="_blank" rel="noopener noreferrer">Apply <Icon name="external" size={15} /></a>
+          <button className="act reach-act" onClick={onOutreach}><Icon name="sparkle" size={16} /><span>Reach out</span></button>
+          <a className="apply" href={job.apply_url} target="_blank" rel="noopener noreferrer" onClick={onApply}>Apply <Icon name="external" size={15} /></a>
         </div>
       </article>
     </div>
@@ -174,10 +179,10 @@ export function JobCard({ job, selected, onOpen, onTick, onStar }: {
 }
 
 // ── Detail: bottom sheet on phones, right-hand pane on desktop ──
-export function JobDetail({ job, window: hw, sameCompany, onClose, onStatus, onStar, onNotes, onCompany }: {
+export function JobDetail({ job, window: hw, sameCompany, onClose, onStatus, onStar, onNotes, onOutreach, onApply, onCompany }: {
   job: Job; window?: HiringWindow; sameCompany: number;
   onClose: () => void; onStatus: (s: string) => void; onStar: () => void;
-  onNotes: (n: string) => void; onCompany: () => void;
+  onNotes: (n: string) => void; onOutreach: () => void; onApply: () => void; onCompany: () => void;
 }) {
   const [copied, setCopied] = useState(false);
   const kw = (job.matched_keywords || '').split(',').filter(Boolean);
@@ -192,21 +197,24 @@ export function JobDetail({ job, window: hw, sameCompany, onClose, onStatus, onS
           <span className="co-name big">{job.company}</span>
           <span className="co-meta">{TIER_LABEL[job.tier]}{payFor(job) ? ` · est. ${payFor(job)}` : ''}</span>
         </div>
-        <button className={`icon-btn ${job.is_bookmarked ? 'star-on' : ''}`} onClick={onStar} aria-label="Save"><Icon name="star" fill={!!job.is_bookmarked} /></button>
+        <button className={`icon-btn ${job.is_bookmarked ? 'star-on' : ''}`} onClick={onStar} aria-label="Shortlist"><Icon name="star" fill={!!job.is_bookmarked} /></button>
       </div>
 
       <h2 className="detail-title">{job.title}</h2>
       <div className="card-meta">
-        <span className={`lvl lvl-${job.role_type === 'fulltime' ? (job.min_experience === null ? 'open' : 'exp') : job.role_type}`}>{levelLabel(job)}</span>
-        {job.min_experience !== null && job.role_type !== 'fulltime' && <span className="st">{job.min_experience === 0 ? 'No experience needed' : `${job.min_experience} yr asked`}</span>}
+        <span className={`lvl lvl-${levelClass(job)}`}>{levelLabel(job)}</span>
+        {job.elig_why && <span className="st">{job.elig_why}</span>}
+        {job.reopened_at && <span className="new">Reopened {timeAgo(job.reopened_at)} ago</span>}
         {!job.is_active && <span className="gone">Posting closed</span>}
         {job.link_status === 0 && <span className="gone">Link looks dead</span>}
       </div>
       <p className="detail-loc"><Icon name="pin" size={15} /> {job.location || '—'}{job.department ? ` · ${job.department}` : ''}</p>
       <p className="detail-sub">Found {timeAgo(job.first_seen)} ago · {Math.round(job.match_score * 100)}% match</p>
 
+      <button className="btn primary wide reach" onClick={onOutreach}><Icon name="sparkle" size={16} /> Reach out to people <kbd>r</kbd></button>
+
       <div className="detail-cta">
-        <a className="btn primary" href={job.apply_url} target="_blank" rel="noopener noreferrer"><span className="ellip">Apply on {job.company}</span> <Icon name="external" size={16} /></a>
+        <a className="btn" href={job.apply_url} target="_blank" rel="noopener noreferrer" onClick={onApply}><span className="ellip">Apply on {job.company}</span> <Icon name="external" size={16} /></a>
         <button className="btn" onClick={() => { navigator.clipboard?.writeText(job.apply_url); setCopied(true); setTimeout(() => setCopied(false), 1500); }}>
           <Icon name={copied ? 'check' : 'copy'} size={16} /> {copied ? 'Copied' : 'Copy link'}
         </button>

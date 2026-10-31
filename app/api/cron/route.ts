@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { runScanAndNotify } from '@/lib/scan-runner';
+import { sendDue } from '@/lib/outreach';
+import { refreshSignals } from '@/lib/signals';
 
 // Triggered by GitHub Actions (every 30 min) or Vercel Cron (daily backstop).
 // Protected by CRON_SECRET env var if set.
@@ -38,6 +40,9 @@ export async function GET(req: NextRequest) {
       // Link checks are optional work; skip them on tight budgets.
       checkLinksBatch: budgetMs >= 60_000 ? 40 : 8,
     });
+    // Release any outreach emails whose staggered send time has arrived.
+    await sendDue().catch(e => console.error('[cron] outreach:', e));
+    await refreshSignals().catch(e => console.error('[cron] signals:', e));
     console.log(`[cron] scanned=${r.scanned}/${r.totalCompanies} new=${r.newJobsFound} notified=${r.notified} complete=${r.complete} nextCursor=${r.nextCursor}`);
     return NextResponse.json({
       success: true,

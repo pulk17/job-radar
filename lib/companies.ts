@@ -5,6 +5,10 @@ export type ATSPlatform =
   | 'eightfold'   // atsSlug: eightfold host prefix, e.g. "mlp" → mlp.eightfold.ai
   | 'pcsx'        // atsSlug: "host|domain" — Eightfold on a company's own career domain
   | 'oracle'      // atsSlug: "host|siteNumber|locationId,locationId" — Oracle Recruiting Cloud
+  | 'jibe'        // atsSlug: careers host — iCIMS-fronted sites serving /api/jobs (full JD included)
+  | 'rippling'    // atsSlug: board name on Rippling's own ATS
+  | 'jobvite'     // atsSlug: company path on jobs.jobvite.com (HTML only)
+  | 'talentbrew'  // atsSlug: careers host (HTML only)
   | 'api'         // atsSlug: custom adapter key ('amazon' | 'atlassian' | 'google' | 'tiktok')
   | 'custom';     // no public API — link-only, tracked in coverage panel
 
@@ -77,10 +81,10 @@ export const COMPANIES: Company[] = [
   { name: 'Grab', tier: 'faang', location: 'Singapore, Bangalore', salary: 'S$80–150K', careersUrl: 'https://www.grab.careers/en/jobs/', ats: 'smartrecruiters', atsSlug: 'Grab', enabled: true, verified: '2026-09-28' },
   { name: 'Cisco', tier: 'faang', location: 'Bangalore', salary: '₹20–35L', careersUrl: 'https://jobs.cisco.com/jobs/SearchJobs/india', ats: 'workday', atsSlug: 'cisco/wd5/Cisco_Careers', enabled: true, verified: '2026-09-28' },
   { name: 'IBM', tier: 'faang', location: 'Bangalore, Pune, Hyderabad', salary: '₹15–30L', careersUrl: 'https://www.ibm.com/careers/search?field_keyword_05[0]=India', ats: 'custom', enabled: true },
-  { name: 'Oracle', tier: 'faang', location: 'Bangalore, Hyderabad', salary: '₹20–35L', careersUrl: 'https://careers.oracle.com/jobs/', ats: 'custom', enabled: true },
+  { name: 'Oracle', tier: 'faang', location: 'Bangalore, Hyderabad', salary: '₹20–35L', careersUrl: 'https://careers.oracle.com/jobs/', ats: 'oracle', atsSlug: 'eeho.fa.us2.oraclecloud.com|CX_45001|300000000106947', enabled: true, verified: '2026-10-31' },
   { name: 'SAP Labs India', tier: 'faang', location: 'Bangalore, Pune', salary: '₹20–35L', careersUrl: 'https://jobs.sap.com/search/?q=&locationsearch=India', ats: 'custom', enabled: true },
   { name: 'PayPal', tier: 'faang', location: 'Chennai, Bangalore', salary: '₹25–40L', careersUrl: 'https://careers.pypl.com/search-results', ats: 'workday', atsSlug: 'paypal/wd1/jobs', enabled: true, verified: '2026-09-28' },
-  { name: 'Booking.com', tier: 'faang', location: 'Bangalore', salary: '₹28–45L', careersUrl: 'https://jobs.booking.com/careers', ats: 'custom', enabled: true },
+  { name: 'Booking.com', tier: 'faang', location: 'Bangalore', salary: '₹28–45L', careersUrl: 'https://jobs.booking.com/careers', ats: 'jibe', atsSlug: 'jobs.booking.com', enabled: true, verified: '2026-10-31' },
   { name: 'Agoda', tier: 'faang', location: 'Singapore, Bangkok, Gurgaon', salary: 'S$80–150K', careersUrl: 'https://careers.agoda.com/', ats: 'greenhouse', atsSlug: 'agoda', enabled: true, verified: '2026-09-28' },
 
   // ══════════ INDIAN STARTUPS / SCALE-UPS ══════════
@@ -101,7 +105,7 @@ export const COMPANIES: Company[] = [
   { name: 'Druva', tier: 'startup', location: 'Pune, Bangalore', salary: '₹22–38L', careersUrl: 'https://www.druva.com/about/careers', ats: 'greenhouse', atsSlug: 'druva', enabled: true, verified: '2026-08-20' }, // 15 India
   { name: 'Turing', tier: 'startup', location: 'Remote India', salary: '₹25–45L', careersUrl: 'https://www.turing.com/careers', ats: 'greenhouse', atsSlug: 'turing', enabled: true, verified: '2026-08-20' }, // 8 India
   { name: 'Atlan', tier: 'startup', location: 'Remote India, Delhi', salary: '₹25–40L', careersUrl: 'https://atlan.com/careers/', ats: 'ashby', atsSlug: 'atlan', enabled: true, verified: '2026-08-20' }, // 5 India
-  { name: 'Tekion', tier: 'startup', location: 'Bangalore, Chennai', salary: '₹25–40L', careersUrl: 'https://tekion.com/careers', ats: 'custom', enabled: true }, // greenhouse board retired
+  { name: 'Tekion', tier: 'startup', location: 'Bangalore, Chennai', salary: '₹25–40L', careersUrl: 'https://tekion.com/careers', ats: 'ashby', atsSlug: 'tekion', enabled: true, verified: '2026-10-31' },
   { name: 'Dream11', tier: 'startup', location: 'Mumbai', salary: '₹25–38L', careersUrl: 'https://www.dreamsports.group/careers/', ats: 'custom', enabled: true }, // lever board retired
   { name: 'CRED', tier: 'startup', location: 'Bangalore', salary: '₹25–40L', careersUrl: 'https://careers.cred.club/', ats: 'lever', atsSlug: 'cred', enabled: true, verified: '2026-08-20' },
   { name: 'Groww', tier: 'startup', location: 'Bangalore', salary: '₹25–35L', careersUrl: 'https://groww.in/careers', ats: 'greenhouse', atsSlug: 'groww', enabled: true, verified: '2026-08-20' }, // 15
@@ -121,7 +125,7 @@ export const COMPANIES: Company[] = [
   { name: 'Lenskart', tier: 'startup', location: 'Gurgaon, Bangalore', salary: '₹18–32L', careersUrl: 'https://www.lenskart.com/careers', ats: 'custom', enabled: true },
   { name: 'Urban Company', tier: 'startup', location: 'Gurgaon', salary: '₹20–35L', careersUrl: 'https://www.urbancompany.com/careers', ats: 'custom', enabled: true },
   { name: 'Juspay', tier: 'startup', location: 'Bangalore', salary: '₹18–30L', careersUrl: 'https://juspay.io/careers', ats: 'custom', enabled: true },
-  { name: 'InMobi', tier: 'startup', location: 'Bangalore', salary: '₹22–35L', careersUrl: 'https://www.inmobi.com/company/careers', ats: 'custom', enabled: true },
+  { name: 'InMobi', tier: 'startup', location: 'Bangalore', salary: '₹22–35L', careersUrl: 'https://www.inmobi.com/company/careers', ats: 'greenhouse', atsSlug: 'inmobi', enabled: true, verified: '2026-10-31' },
   { name: 'CoinDCX', tier: 'startup', location: 'Mumbai, Bangalore', salary: '₹20–32L', careersUrl: 'https://careers.coindcx.com/', ats: 'custom', enabled: true },
   { name: 'Delhivery', tier: 'startup', location: 'Gurgaon, Bangalore', salary: '₹18–30L', careersUrl: 'https://www.delhivery.com/careers/', ats: 'custom', enabled: true },
   { name: 'Sprinto', tier: 'startup', location: 'Remote India', salary: '₹18–32L', careersUrl: 'https://sprinto.com/careers/', ats: 'custom', enabled: true },
@@ -170,7 +174,7 @@ export const COMPANIES: Company[] = [
   { name: 'Starburst', tier: 'product', location: 'Remote India', salary: '₹25–40L', careersUrl: 'https://www.starburst.io/careers/', ats: 'greenhouse', atsSlug: 'starburst', enabled: true, verified: '2026-08-20' }, // 4 India
   { name: 'Temporal', tier: 'product', location: 'Remote India', salary: '₹28–45L', careersUrl: 'https://temporal.io/careers', ats: 'ashby', atsSlug: 'temporal', enabled: true, verified: '2026-09-28' }, // moved off Greenhouse
   { name: 'Vercel', tier: 'product', location: 'Remote India', salary: '₹28–50L', careersUrl: 'https://vercel.com/careers', ats: 'greenhouse', atsSlug: 'vercel', enabled: true, verified: '2026-08-20' }, // 3 India
-  { name: 'Amplitude', tier: 'product', location: 'Remote India, Singapore', salary: '₹25–40L', careersUrl: 'https://amplitude.com/careers', ats: 'greenhouse', atsSlug: 'amplitude', enabled: true, verified: '2026-08-20' },
+  { name: 'Amplitude', tier: 'product', location: 'Remote India, Singapore', salary: '₹25–40L', careersUrl: 'https://amplitude.com/careers', ats: 'ashby', atsSlug: 'amplitude', enabled: true, verified: '2026-10-31' },
   { name: 'Grafana Labs', tier: 'product', location: 'Remote India', salary: '₹25–45L', careersUrl: 'https://grafana.com/about/careers/', ats: 'greenhouse', atsSlug: 'grafanalabs', enabled: true, verified: '2026-08-20' },
   { name: 'Mixpanel', tier: 'product', location: 'Singapore, Remote', salary: 'S$90–150K', careersUrl: 'https://mixpanel.com/careers/', ats: 'greenhouse', atsSlug: 'mixpanel', enabled: true, verified: '2026-08-20' }, // 6 SG
   { name: 'Klaviyo', tier: 'product', location: 'Singapore', salary: 'S$90–150K', careersUrl: 'https://www.klaviyo.com/careers', ats: 'greenhouse', atsSlug: 'klaviyo', enabled: true, verified: '2026-08-20' }, // 6 SG
@@ -180,12 +184,15 @@ export const COMPANIES: Company[] = [
   { name: 'ServiceNow', tier: 'product', location: 'Hyderabad, Bangalore', salary: '₹25–45L', careersUrl: 'https://careers.servicenow.com/', ats: 'smartrecruiters', atsSlug: 'ServiceNow', enabled: true, verified: '2026-08-20' },
   { name: 'Arista Networks', tier: 'product', location: 'Bangalore, Pune', salary: '₹30–50L', careersUrl: 'https://www.arista.com/en/careers', ats: 'smartrecruiters', atsSlug: 'AristaNetworks', enabled: true, verified: '2026-08-20' },
   { name: 'Freshworks', tier: 'product', location: 'Chennai, Bangalore', salary: '₹20–35L', careersUrl: 'https://careers.freshworks.com/', ats: 'smartrecruiters', atsSlug: 'Freshworks', enabled: true, verified: '2026-08-20' },
-  { name: 'Nutanix', tier: 'product', location: 'Bangalore, Pune', salary: '₹25–38L', careersUrl: 'https://www.nutanix.com/company/careers', ats: 'custom', enabled: true },
+  { name: 'Nutanix', tier: 'product', location: 'Bangalore, Pune', salary: '₹25–38L', careersUrl: 'https://www.nutanix.com/company/careers', ats: 'jobvite', atsSlug: 'nutanix', enabled: true, verified: '2026-10-31' },
+  { name: 'Rippling', tier: 'product', location: 'Bangalore', salary: '', careersUrl: 'https://www.rippling.com/careers', ats: 'rippling', atsSlug: 'rippling', enabled: true, verified: '2026-10-31' },
+  { name: 'Palantir', tier: 'product', location: 'Singapore', salary: '', careersUrl: 'https://www.palantir.com/careers/', ats: 'lever', atsSlug: 'palantir', enabled: true, verified: '2026-10-31' },
+  { name: 'Cohesity', tier: 'product', location: 'Bangalore', salary: '', careersUrl: 'https://www.cohesity.com/careers/', ats: 'custom', enabled: true },
   { name: 'Confluent', tier: 'product', location: 'Bangalore, Remote', salary: '₹28–45L', careersUrl: 'https://careers.confluent.io/', ats: 'ashby', atsSlug: 'confluent', enabled: true, verified: '2026-09-28' },
   { name: 'Zscaler', tier: 'product', location: 'Bangalore, Hyderabad', salary: '₹25–40L', careersUrl: 'https://www.zscaler.com/careers', ats: 'greenhouse', atsSlug: 'zscaler', enabled: true, verified: '2026-09-28' },
   { name: 'Akamai', tier: 'product', location: 'Bangalore', salary: '₹22–35L', careersUrl: 'https://www.akamai.com/careers', ats: 'custom', enabled: true },
   { name: 'Splunk', tier: 'product', location: 'Hyderabad, Bangalore', salary: '₹25–40L', careersUrl: 'https://www.splunk.com/en_us/careers.html', ats: 'custom', enabled: true },
-  { name: 'Intuit', tier: 'product', location: 'Bangalore', salary: '₹25–40L', careersUrl: 'https://www.intuit.com/careers/', ats: 'custom', enabled: true },
+  { name: 'Intuit', tier: 'product', location: 'Bangalore', salary: '₹25–40L', careersUrl: 'https://www.intuit.com/careers/', ats: 'talentbrew', atsSlug: 'jobs.intuit.com', enabled: true, verified: '2026-10-31' },
   { name: 'Media.net', tier: 'product', location: 'Mumbai', salary: '₹25–35L', careersUrl: 'https://www.media.net/careers/', ats: 'custom', enabled: true },
   { name: 'Airwallex', tier: 'product', location: 'Singapore, Bangalore', salary: 'S$90–160K', careersUrl: 'https://careers.airwallex.com/', ats: 'ashby', atsSlug: 'airwallex', enabled: true, verified: '2026-09-28' },
 
@@ -228,10 +235,10 @@ export const COMPANIES: Company[] = [
   { name: 'DE Shaw India', tier: 'quant', location: 'Hyderabad, Bangalore', salary: '₹40–80L', careersUrl: 'https://www.deshawindia.com/careers', ats: 'custom', enabled: true },
   { name: 'Citadel Securities', tier: 'quant', location: 'Gurgaon', salary: '₹80L–1.5Cr', careersUrl: 'https://www.citadelsecurities.com/careers/open-opportunities/', ats: 'custom', enabled: true },
   { name: 'Two Sigma', tier: 'quant', location: 'Mumbai', salary: '₹70L–1.2Cr', careersUrl: 'https://careers.twosigma.com/', ats: 'custom', enabled: true },
-  { name: 'SIG (Susquehanna)', tier: 'quant', location: 'Mumbai', salary: '₹60L–1.2Cr', careersUrl: 'https://careers.sig.com/', ats: 'custom', enabled: true },
+  { name: 'SIG (Susquehanna)', tier: 'quant', location: 'Mumbai', salary: '₹60L–1.2Cr', careersUrl: 'https://careers.sig.com/', ats: 'jibe', atsSlug: 'careers.sig.com', enabled: true, verified: '2026-10-31' },
   { name: 'Quadeye Securities', tier: 'quant', location: 'Gurgaon', salary: '₹35–70L', careersUrl: 'https://quadeye.com/careers/', ats: 'custom', enabled: true },
-  { name: 'AlphaGrep Securities', tier: 'quant', location: 'Mumbai', salary: '₹40–80L', careersUrl: 'https://www.alphagrep.com/careers.html', ats: 'custom', enabled: true },
-  { name: 'NK Securities Research', tier: 'quant', location: 'Gurgaon', salary: '₹50L–1Cr', careersUrl: 'https://www.nksecurities.com/', ats: 'custom', enabled: true },
+  { name: 'AlphaGrep Securities', tier: 'quant', location: 'Mumbai', salary: '₹40–80L', careersUrl: 'https://www.alphagrep.com/careers.html', ats: 'greenhouse', atsSlug: 'alphagrepsecurities', enabled: true, verified: '2026-10-31' },
+  { name: 'NK Securities Research', tier: 'quant', location: 'Gurgaon', salary: '₹50L–1Cr', careersUrl: 'https://www.nksecurities.com/', ats: 'greenhouse', atsSlug: 'nksecuritiesresearch', enabled: true, verified: '2026-10-31' },
   { name: 'QuantBox Research', tier: 'quant', location: 'Bangalore, Singapore', salary: '₹50L–1Cr', careersUrl: 'https://www.quantbox.in/', ats: 'custom', enabled: true },
   { name: 'iRage Capital', tier: 'quant', location: 'Mumbai', salary: '₹30–60L', careersUrl: 'https://iragecapital.com/careers/', ats: 'custom', enabled: true },
 
@@ -245,9 +252,9 @@ export const COMPANIES: Company[] = [
   { name: 'Crypto.com', tier: 'banking', location: 'Singapore', salary: 'S$90–180K', careersUrl: 'https://crypto.com/careers', ats: 'lever', atsSlug: 'crypto', enabled: true, verified: '2026-08-20' }, // 28 SG
   { name: 'Adyen', tier: 'banking', location: 'Singapore, Remote', salary: 'S$90–160K', careersUrl: 'https://careers.adyen.com/', ats: 'greenhouse', atsSlug: 'adyen', enabled: true, verified: '2026-08-20' }, // 7/12
   { name: 'Goldman Sachs', tier: 'banking', location: 'Bangalore, Singapore', salary: '₹25–40L', careersUrl: 'https://higher.gs.com/roles', ats: 'custom', enabled: true },
-  { name: 'Morgan Stanley', tier: 'banking', location: 'Mumbai, Bangalore', salary: '₹22–35L', careersUrl: 'https://www.morganstanley.com/careers', ats: 'custom', enabled: true },
+  { name: 'Morgan Stanley', tier: 'banking', location: 'Mumbai, Bangalore', salary: '₹22–35L', careersUrl: 'https://ms.wd5.myworkdayjobs.com/External', ats: 'workday', atsSlug: 'ms/wd5/External', enabled: true, verified: '2026-10-31' },
   { name: 'JPMorgan Chase', tier: 'banking', location: 'Hyderabad, Bangalore, Singapore', salary: '₹20–30L', careersUrl: 'https://careers.jpmorgan.com/in/en/students', ats: 'oracle', atsSlug: 'jpmc.fa.oraclecloud.com|CX_1001|300000000289360,300000000289639', enabled: true, verified: '2026-09-28' },
-  { name: 'Visa', tier: 'banking', location: 'Bangalore, Singapore', salary: '₹25–38L', careersUrl: 'https://corporate.visa.com/en/careers.html', ats: 'custom', enabled: true },
+  { name: 'Visa', tier: 'banking', location: 'Bangalore, Singapore', salary: '₹25–38L', careersUrl: 'https://visa.wd5.myworkdayjobs.com/Visa', ats: 'workday', atsSlug: 'visa/wd5/Visa', enabled: true, verified: '2026-10-31' },
   { name: 'Mastercard', tier: 'banking', location: 'Gurgaon, Pune', salary: '₹25–38L', careersUrl: 'https://careers.mastercard.com/', ats: 'workday', atsSlug: 'mastercard/wd1/CorporateCareers', enabled: true, verified: '2026-09-28' },
   { name: 'American Express', tier: 'banking', location: 'Gurgaon, Bangalore', salary: '₹22–35L', careersUrl: 'https://www.americanexpress.com/en-us/careers/', ats: 'custom', enabled: true },
   { name: 'UBS', tier: 'banking', location: 'Hyderabad, Pune, Singapore', salary: '₹20–32L', careersUrl: 'https://www.ubs.com/global/en/careers.html', ats: 'custom', enabled: true },
@@ -264,7 +271,7 @@ export const COMPANIES: Company[] = [
   { name: 'Analog Devices', tier: 'semi', location: 'Bangalore, Hyderabad', salary: '₹22–38L', careersUrl: 'https://www.analog.com/en/about-adi/careers.html', ats: 'workday', atsSlug: 'analogdevices/wd1/External', enabled: true, verified: '2026-08-20' }, // 109
   { name: 'Samsung', tier: 'semi', location: 'Bangalore (SRI-B), Noida', salary: '₹25–45L', careersUrl: 'https://sec.wd3.myworkdayjobs.com/Samsung_Careers', ats: 'workday', atsSlug: 'sec/wd3/Samsung_Careers', enabled: true, verified: '2026-08-20' }, // 50
   { name: 'Qualcomm', tier: 'semi', location: 'Hyderabad, Bangalore', salary: '₹25–40L', careersUrl: 'https://careers.qualcomm.com/careers', ats: 'pcsx', atsSlug: 'careers.qualcomm.com|qualcomm.com', enabled: true, verified: '2026-09-28' },
-  { name: 'AMD', tier: 'semi', location: 'Hyderabad, Bangalore', salary: '₹25–40L', careersUrl: 'https://careers.amd.com/careers-home', ats: 'custom', enabled: true },
+  { name: 'AMD', tier: 'semi', location: 'Hyderabad, Bangalore', salary: '₹25–40L', careersUrl: 'https://careers.amd.com/careers-home', ats: 'jibe', atsSlug: 'careers.amd.com', enabled: true, verified: '2026-10-31' },
   { name: 'ARM', tier: 'semi', location: 'Bangalore, Noida', salary: '₹25–40L', careersUrl: 'https://careers.arm.com/', ats: 'custom', enabled: true },
   { name: 'Broadcom', tier: 'semi', location: 'Bangalore, Hyderabad', salary: '₹25–40L', careersUrl: 'https://www.broadcom.com/company/careers', ats: 'workday', atsSlug: 'broadcom/wd1/External_Career', enabled: true, verified: '2026-09-28' },
   { name: 'Texas Instruments', tier: 'semi', location: 'Bangalore', salary: '₹25–40L', careersUrl: 'https://careers.ti.com/', ats: 'oracle', atsSlug: 'edbz.fa.us2.oraclecloud.com|CX|300000000361484', enabled: true, verified: '2026-09-28' },

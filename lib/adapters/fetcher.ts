@@ -1,6 +1,6 @@
 import { Company, COMPANIES, TIER_FOCUS } from '../companies';
-import { matchJob, MATCH_THRESHOLD, detectLanguages, type RoleType } from '../matcher';
-import { upsertJobs, markInactiveJobs, recordScanResult, hasAnyJobs, markNotified, UpsertJobInput } from '../db';
+import { matchJob, MATCH_THRESHOLD, detectLanguages, stripHtml, type RoleType } from '../matcher';
+import { upsertJobs, markInactiveJobs, retireUnscanned, recordScanResult, hasAnyJobs, markNotified, getStoredJds, UpsertJobInput } from '../db';
 import crypto from 'crypto';
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
@@ -31,28 +31,51 @@ interface RawJob {
   content?: string;
   /** The source's own career-level tag, when it has one (Google, TikTok) */
   level?: RoleType;
+  /** Boards that list titles only: fetches this posting's JD. */
+  detail?: () => Promise<string>;
 }
+
+const JD_MAX = 12_000, DETAILS_PER_SCAN = 30;
 
 /** Run raw jobs through matching, store them in one batch, mark vanished ones inactive. */
 async function ingest(company: Company, raws: RawJob[]): Promise<FetchResult> {
   const rows: UpsertJobInput[] = [];
   const info = new Map<string, NewJobInfo>();
+  const judge = (r: RawJob, text: string) => matchJob(r.title, r.location, r.department, text, TIER_FOCUS[company.tier], r.level);
+
+  // A title can't say whether a role wants 0 years, so title-only boards get their JD
+  // fetched once per posting and reused after that. Clear rejects skip the request, and
+  // what doesn't fit this run's cap stays "unclear" until the next one.
+  const stored = raws.some(r => r.detail) ? await getStoredJds(company.name) : new Map<string, string>();
+  const texts = new Map(raws.map(r => [r, r.content || stored.get(hashId(company.name, r.title, r.location)) || '']));
+  const missing = raws.filter(r => {
+    if (!r.title || !r.detail || texts.get(r)) return false;
+    const m = judge(r, '');
+    return m.score >= 0 && m.elig !== 'no';
+  }).slice(0, DETAILS_PER_SCAN);
+  for (let i = 0; i < missing.length; i += 5) {
+    await Promise.all(missing.slice(i, i + 5).map(async r => { texts.set(r, await r.detail!().catch(() => '')); }));
+  }
 
   for (const raw of raws) {
     if (!raw.title) continue;
-    const m = matchJob(raw.title, raw.location, raw.department, raw.content, TIER_FOCUS[company.tier], raw.level);
-    if (m.score < MATCH_THRESHOLD) continue;
+    const text = texts.get(raw) || '';
+    const m = judge(raw, text);
+    // Rejects are stored too, so their fetched JD isn't fetched again on every scan.
+    if (m.score < 0 || (m.elig === 'unclear' && m.score < MATCH_THRESHOLD)) continue;
 
     const id = hashId(company.name, raw.title, raw.location);
     rows.push({
       id, company: company.name, tier: company.tier, title: raw.title,
       location: raw.location, department: raw.department,
       apply_url: raw.applyUrl, salary_range: company.salary, ats_platform: company.ats,
-      role_type: m.roleType, languages: detectLanguages(raw.title, raw.content).join(','),
+      role_type: m.roleType, languages: detectLanguages(raw.title, text).join(','),
       region: m.region, matched_keywords: m.matchedKeywords.join(','),
-      min_experience: m.minExperience, match_score: m.score,
+      min_experience: m.minExperience, match_score: m.score, batch_fit: m.batch || '',
+      elig: m.elig, elig_why: m.why,
+      jd: raw.detail || m.elig !== 'no' ? stripHtml(text).slice(0, JD_MAX) : '',
     });
-    info.set(id, {
+    if (m.elig !== 'no') info.set(id, {
       company: company.name, title: raw.title, location: raw.location,
       applyUrl: raw.applyUrl, score: m.score, roleType: m.roleType, region: m.region,
     });
@@ -76,6 +99,12 @@ async function getJson(url: string, init?: RequestInit): Promise<unknown> {
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
+}
+
+async function getText(url: string): Promise<string> {
+  const res = await fetch(url, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(12000) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.text();
 }
 
 /** Drop repeats when several queries return the same posting. */
@@ -146,6 +175,11 @@ async function fetchSmartRecruiters(company: Company): Promise<FetchResult> {
         location: j.location?.city ? `${j.location.city}, ${j.location.country}` : j.location?.country || '',
         department: j.department?.label || '',
         applyUrl: j.id ? `https://jobs.smartrecruiters.com/${company.atsSlug}/${j.id}` : company.careersUrl,
+        detail: j.id ? async () => {
+          const d = await getJson(`https://api.smartrecruiters.com/v1/companies/${company.atsSlug}/postings/${j.id}`) as { jobAd?: { sections?: Record<string, { text?: string }> } };
+          const s = d.jobAd?.sections || {};
+          return `${s.jobDescription?.text || ''} ${s.qualifications?.text || ''}`.trim();
+        } : undefined,
       });
     }
     if (jobs.length < 100) break;
@@ -214,6 +248,10 @@ async function fetchWorkday(company: Company): Promise<FetchResult> {
         // externalPath is "/job/<loc>/<slug>" and the site needs all of it — stripping
         // "/job" (the old code) gave a page whose data call 422s.
         applyUrl: j.externalPath ? `${base}/en-US/${site}${j.externalPath}` : company.careersUrl,
+        detail: j.externalPath ? async () => {
+          const d = await getJson(`${base}/wday/cxs/${tenant}/${site}${j.externalPath}`) as { jobPostingInfo?: { jobDescription?: string } };
+          return d.jobPostingInfo?.jobDescription || '';
+        } : undefined,
       });
     }
   };
@@ -244,6 +282,7 @@ async function fetchEightfold(company: Company): Promise<FetchResult> {
         location: [p.location, ...(p.locations || [])].filter(Boolean).join(', '),
         department: p.department || '',
         applyUrl: p.canonicalPositionUrl || `https://${host}.eightfold.ai/careers/job/${p.id}`,
+        detail: async () => ((await getJson(`https://${host}.eightfold.ai/api/apply/v2/jobs/${p.id}`)) as { job_description?: string }).job_description || '',
       });
     }
   }
@@ -257,12 +296,13 @@ async function fetchPcsx(company: Company): Promise<FetchResult> {
   const raws: RawJob[] = [];
   const page = async (loc: string, query: string, start: number) => {
     const d = await getJson(`https://${host}/api/pcsx/search?domain=${domain}&query=${encodeURIComponent(query)}&location=${loc}&start=${start}&num=10&sort_by=timestamp`) as {
-      data?: { positions?: Array<{ name?: string; locations?: string[]; department?: string; positionUrl?: string }> };
+      data?: { positions?: Array<{ id?: number | string; name?: string; locations?: string[]; department?: string; positionUrl?: string }> };
     };
     const ps = d.data?.positions || [];
     for (const p of ps) raws.push({
       title: p.name || '', location: (p.locations || []).join('; ') || loc,
       department: p.department || '', applyUrl: p.positionUrl ? `https://${host}${p.positionUrl}` : company.careersUrl,
+      detail: async () => ((await getJson(`https://${host}/api/pcsx/position_details?position_id=${p.id}&domain=${domain}&hl=en`)) as { data?: { jobDescription?: string } }).data?.jobDescription || '',
     });
     return ps.length;
   };
@@ -293,6 +333,72 @@ async function fetchOracle(company: Company): Promise<FetchResult> {
       });
       if (reqs.length < 25) break;
     }
+  }
+  return ingest(company, dedupe(raws));
+}
+
+// ── Jibe (iCIMS-fronted career sites: AMD, SIG, Booking) — atsSlug: careers host ──
+async function fetchJibe(company: Company): Promise<FetchResult> {
+  const raws: RawJob[] = [];
+  for (const loc of ['India', 'Singapore']) {
+    for (let page = 1; page <= 3; page++) {
+      const d = await getJson(`https://${company.atsSlug}/api/jobs?page=${page}&limit=100&location=${loc}&sortBy=posted_date&descending=true`) as {
+        jobs?: Array<{ data?: { title?: string; full_location?: string; categories?: Array<{ name?: string }>; apply_url?: string; description?: string; qualifications?: string } }>;
+      };
+      const jobs = d.jobs || [];
+      for (const { data: j } of jobs) raws.push({
+        title: j?.title || '', location: j?.full_location || loc,
+        department: j?.categories?.[0]?.name || '',
+        applyUrl: j?.apply_url || company.careersUrl,
+        content: `${j?.description || ''} ${j?.qualifications || ''}`,
+      });
+      if (jobs.length < 100) break;
+    }
+  }
+  return ingest(company, dedupe(raws));
+}
+
+// ── Rippling's own ATS — atsSlug: board name ──
+async function fetchRippling(company: Company): Promise<FetchResult> {
+  const board = `https://api.rippling.com/platform/api/ats/v1/board/${company.atsSlug}/jobs`;
+  const jobs = await getJson(board) as Array<{ uuid?: string; name?: string; url?: string; department?: { label?: string }; workLocation?: { label?: string } }>;
+  if (!Array.isArray(jobs)) throw new Error('unexpected response');
+  return ingest(company, jobs.map(j => ({
+    title: (j.name || '').trim(), location: j.workLocation?.label || '', department: j.department?.label || '',
+    applyUrl: j.url || company.careersUrl,
+    detail: async () => Object.values(((await getJson(`${board}/${j.uuid}`)) as { description?: Record<string, string> }).description || {}).join(' '),
+  })));
+}
+
+// ── Jobvite — atsSlug: company path. No public JSON, so this reads the listing page ──
+async function fetchJobvite(company: Company): Promise<FetchResult> {
+  const site = `https://jobs.jobvite.com`;
+  const html = await getText(`${site}/${company.atsSlug}/jobs`);
+  const row = /<a href="(\/[^"]+\/job\/[^"]+)">([\s\S]*?)<\/a>[\s\S]*?jv-job-list-location[^>]*>([\s\S]*?)<\/td>/g;
+  const rows = [...html.matchAll(row)];
+  if (!rows.length) throw new Error('page format changed');
+  return ingest(company, dedupe(rows.map(m => ({
+    title: stripHtml(m[2]).trim(), location: stripHtml(m[3]).trim(), applyUrl: site + m[1],
+    detail: async () => (await getText(site + m[1])).match(/class="jv-job-detail-description"[^>]*>([\s\S]*?)<div class="jv-job-detail-bottom/)?.[1] || '',
+  }))));
+}
+
+// ── TalentBrew — atsSlug: careers host. HTML search pages; "India" also matches postings that merely mention it, so the city in the URL decides the region ──
+async function fetchTalentBrew(company: Company): Promise<FetchResult> {
+  const site = `https://${company.atsSlug}`;
+  const raws: RawJob[] = [];
+  for (let page = 1; page <= 5; page++) {
+    const html = await getText(`${site}/search-jobs/India?p=${page}`);
+    const links = [...html.matchAll(/<a href="(\/job\/([^/"]+)\/[^"]+)"[^>]*data-job-id="\d+"[^>]*data-title="([^"]*)"/g)];
+    if (!links.length) break;
+    for (const m of links) raws.push({
+      title: stripHtml(m[3]).trim(), location: m[2].replace(/-/g, ' '), applyUrl: site + m[1],
+      detail: async () => {
+        const ld = (await getText(site + m[1])).match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/)?.[1];
+        return ld ? (JSON.parse(ld) as { description?: string }).description || '' : '';
+      },
+    });
+    if (page >= Number(html.match(/data-total-pages="(\d+)"/)?.[1] || 1)) break;
   }
   return ingest(company, dedupe(raws));
 }
@@ -404,6 +510,10 @@ export async function fetchJobsForCompany(company: Company): Promise<FetchResult
       case 'eightfold': return await fetchEightfold(company);
       case 'pcsx': return await fetchPcsx(company);
       case 'oracle': return await fetchOracle(company);
+      case 'jibe': return await fetchJibe(company);
+      case 'rippling': return await fetchRippling(company);
+      case 'jobvite': return await fetchJobvite(company);
+      case 'talentbrew': return await fetchTalentBrew(company);
       case 'api': {
         const adapter = API_ADAPTERS[company.atsSlug || ''];
         if (!adapter) return EMPTY;
@@ -471,6 +581,7 @@ export async function runFullScan(opts: ScanOptions = {}): Promise<ScanSummary> 
   };
   await Promise.all(Array.from({ length: 8 }, worker));
   const processed = next;
+  await retireUnscanned(enabled.map(c => c.name));
 
   const complete = processed >= total;
   return {
